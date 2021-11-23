@@ -4,11 +4,8 @@ pragma solidity >=0.8.0 <0.9.0;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-//SafeMath in this contract IS USED ONLY IN RISKY CALCULATIONS . However, the use of this library is not mandatory on solidity 0.8.0 or higher
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 contract IDO is Ownable, Pausable {
-    using SafeMath for uint256;
     using SafeERC20 for IERC20;
     // <================================ CONSTANTS ================================>
     uint8 constant TEAM_PERCENTAGE = 15;
@@ -48,21 +45,14 @@ contract IDO is Ownable, Pausable {
         require(reserveAddress != address(0), "IDO: Reserve address must not be zero");
         _euph = IERC20(euphAddress);
         _busd = IERC20(busdAddress);
-        uint256 totalSupply = _euph.totalSupply();
         
         _teamShare.shareAddress = teamAddress;
         _marketingShare.shareAddress = marketingAddress;
         _reserveShare.shareAddress = reserveAddress;
         
-        _teamShare.releaseTime = _monthsToTimestamp(TEAM_DURATION_IN_MONTHS).add(block.timestamp);
-        _marketingShare.releaseTime = _monthsToTimestamp(MARKETING_DURATION_IN_MONTHS).add(block.timestamp);
-        _reserveShare.releaseTime = _monthsToTimestamp(RESERVE_DURATION_IN_MONTHS).add(block.timestamp);
-        
-        _teamShare.share = totalSupply.mul(TEAM_PERCENTAGE).div(100);
-        _marketingShare.share = totalSupply.mul(MARKETING_PERCENTAGE).div(100);
-        _reserveShare.share = totalSupply.mul(RESERVE_PERCENTAGE).div(100);
-        _publicShare = totalSupply.mul(PUBLIC_PERCENTAGE).div(100);
-        
+        _teamShare.releaseTime = block.timestamp + _monthsToTimestamp(TEAM_DURATION_IN_MONTHS);
+        _marketingShare.releaseTime = block.timestamp + _monthsToTimestamp(MARKETING_DURATION_IN_MONTHS);
+        _reserveShare.releaseTime = block.timestamp + _monthsToTimestamp(RESERVE_DURATION_IN_MONTHS);
         
         _euphPrice = euphPrice;
         _pause();
@@ -76,9 +66,15 @@ contract IDO is Ownable, Pausable {
         require(_contractStarted == false, "IDO: The IDO contract has been already initialized");
         uint256 totalSupply = _euph.totalSupply();
         uint256 totalPercentage = TEAM_PERCENTAGE + PUBLIC_PERCENTAGE + RESERVE_PERCENTAGE + MARKETING_PERCENTAGE;
-        uint256 initialSupply = totalSupply.mul(totalPercentage).div(100); //(totalSupply * totalPercentage) / 100;
+        uint256 initialSupply = (totalSupply * totalPercentage) / 100;
+
+        _teamShare.share = (totalSupply * TEAM_PERCENTAGE) / 100;
+        _marketingShare.share = (totalSupply * MARKETING_PERCENTAGE) / 100;
+        _reserveShare.share = (totalSupply * RESERVE_PERCENTAGE) / 100;
+        _publicShare = (totalSupply * PUBLIC_PERCENTAGE) / 100;
+
         _contractStarted = true;
-        _startDate = block.timestamp - (block.timestamp % 86400);
+        _startDate = block.timestamp - (block.timestamp % 1 days);
         transferTokensToContract(initialSupply);
         _unpause();
     }
@@ -91,7 +87,7 @@ contract IDO is Ownable, Pausable {
     Share public _marketingShare;
     Share public _reserveShare;
     uint256 public _euphPrice; //In full decimal precision. Example: 0.0009 Busd = 900000000000000;
-    bool _contractStarted;
+    bool private _contractStarted;
 
     // <================================ EXTERNAL FUNCTIONS ================================>
 
@@ -103,9 +99,9 @@ contract IDO is Ownable, Pausable {
         address buyer = _msgSender();
         require(buyer != address(0), "IDO: Token issue to Zero address is prohibited");
         require(busdAmount > 0, "IDO: Provided BUSD amount must be higher than 0");
-        uint256 tokensAmountToIssue = busdAmount.div(_euphPrice); //busdAmount / _euphPrice; //The total number of full tokens that will be issued. 1 Full EUPH token = 1000 tokens in full decimal precision
-        require(tokensAmountToIssue > 0, "IDO: Provided price value is not sufficient to by even one EUPH token");
-        uint256 totalPrice = tokensAmountToIssue.mul(_euphPrice); //tokensAmountToIssue * _euphPrice; //Total price in BUSD to buy specific number of EUPH tokens
+        uint256 tokensAmountToIssue = busdAmount / _euphPrice; // The total number of full tokens that will be issued. 1 Full EUPH token = 1000 tokens in full decimal precision
+        require(tokensAmountToIssue > 0, "IDO: Provided price value is not sufficient to buy even one EUPH token");
+        uint256 totalPrice = tokensAmountToIssue * _euphPrice; //Total price in BUSD to buy specific number of EUPH tokens
         uint256 kiloTokensToIssue = toKiloToken(tokensAmountToIssue); //Total amount of EUPH tokens (in full decimal precision) to issue
 
         require(_issueTokens(buyer, totalPrice, kiloTokensToIssue), "IDO: Token transfer failed");
@@ -143,8 +139,9 @@ contract IDO is Ownable, Pausable {
 
     function transferTokensToContract(uint256 amount) public onlyOwner
     {
-        _euph.safeTransferFrom(_msgSender(), address(this), amount);
-        emit TokensTransferedToStakingBalance(_msgSender(), amount);
+        address owner = _msgSender();
+        _euph.safeTransferFrom(owner, address(this), amount);
+        emit TokensTransferedToStakingBalance(owner, amount);
     }
 
     function withdrawBUSD() external onlyOwner returns (bool) {
@@ -161,7 +158,7 @@ contract IDO is Ownable, Pausable {
         uint256 balanceEUPH = _euph.balanceOf(address(this));
         if(balanceBUSD > 0) _busd.safeTransfer(owner, balanceBUSD);
         if(balanceEUPH > 0)  _euph.safeTransfer(owner, balanceEUPH);
-        selfdestruct(payable(_msgSender()));
+        selfdestruct(payable(owner));
     }
 
     // <================================ INTERNAL & PRIVATE FUNCTIONS ================================>
@@ -177,18 +174,18 @@ contract IDO is Ownable, Pausable {
         require(_busd.allowance(buyer, address(this)) >= busdToPay, "IDO: Not enough allowance to perform transfer. Please be sure to approve sufficient tokens amount");
         _busd.safeTransferFrom(buyer, address(this), busdToPay);
         _euph.safeTransfer(buyer, euphToIssue);
-        _publicShare = _publicShare.sub(euphToIssue);
+        _publicShare -= euphToIssue;
 
         emit TokensPurchased(buyer, busdToPay, euphToIssue);
         return true;
     }
 
     function _monthsToTimestamp(uint256 months) internal pure returns(uint256) {
-        return months.mul(2592000);
+        return months * 30 days;
     }
 
     function toKiloToken(uint256 amount) internal pure returns(uint256) {
-        return amount.mul((10 ** decimals()));
+        return amount * (10 ** decimals());
     }
 
     function decimals() internal pure returns(uint8) {
