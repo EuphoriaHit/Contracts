@@ -32,4 +32,6 @@ Format: Address - Share (Precentage from total supply, block duration)
 - 0xCE98892a5Ca6A9509d18a5920Fa57Dfdf8baE19D - MARKETING (10%, 6 Months)
 - 0xad7f22d20cd54C9243041C14f224FC13477EEDaB - RESERVE (20%, 12 Months)
 - IDO address - PUBLIC (2%, ---)
+
+
 The last update: 23nd of November 2021
