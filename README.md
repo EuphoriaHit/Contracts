@@ -25,5 +25,11 @@ NB! IF THE METHOD IS PRECEDED BY *, THEN IT CAN ONLY BE CALLED BY THE OWNER OF T
 - *withdrawbusd() - Outputs all currently accumulated BUSD tokens to the owner's address  
 - *finalize() - Completes the contract and transfers all currently accumulated BUSD tokens to the owner's address
 
-
-The last update: 22nd of November 2021
+### Addresses
+#### IDO Contract, while initialization process, temporarily blocks specific amount of tokens for the following shares:
+Format: Address - Share (Precentage from total supply, block duration)  
+- 0x2aAC387f76ed505A0F72216C885aE3cDEA003B3F - TEAM (15%, 6 Months)
+- 0xCE98892a5Ca6A9509d18a5920Fa57Dfdf8baE19D - MARKETING (10%, 6 Months)
+- 0xad7f22d20cd54C9243041C14f224FC13477EEDaB - RESERVE (20%, 12 Months)
+- IDO address - PUBLIC (2%, ---)
+The last update: 23nd of November 2021
