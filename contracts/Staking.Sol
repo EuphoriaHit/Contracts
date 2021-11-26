@@ -3,17 +3,16 @@ pragma solidity >=0.8.0 <0.9.0;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./ABDKMathQuad.sol";
 
 //This smart contract's reward distribution algorithm was based on this article
 //https://uploads-ssl.webflow.com/5ad71ffeb79acc67c8bcdaba/5ad8d1193a40977462982470_scalable-reward-distribution-paper.pdf
     
 contract Staking is Ownable{
     using SafeERC20 for IERC20;
-    uint8 constant COMISSION_PERCENTAGE = 10;
+    uint64 constant PRECISION = 1000000000000;
 
     modifier contractExpired() {
-        uint256 currentDay = getCurrentDay();
+        uint256 currentDay = _getCurrentDay();
         if(_totalStakes == 0) {
             uint256 pausedDays = currentDay - _lastActiveDay;
             _daysInPause += pausedDays == 0 ? 0 : pausedDays - 1;
@@ -24,7 +23,7 @@ contract Staking is Ownable{
     }
 
     modifier contractNotExpired() {
-        uint256 currentDay = getCurrentDay();
+        uint256 currentDay = _getCurrentDay();
         if(_totalStakes == 0) {
             uint256 pausedDays = currentDay - _lastActiveDay;
             _daysInPause += pausedDays == 0 ? 0 : pausedDays - 1;
@@ -46,17 +45,18 @@ contract Staking is Ownable{
 
     // <================================ CONSTRUCTOR AND INITIALIZER ================================>
 
-    constructor(uint256 supplyPercentage, uint256 durationInDays, address tokenAddress) {
-        setToken(tokenAddress);
-        setSupplyAndDuration(supplyPercentage, durationInDays);
+    constructor(uint256 supplyPercentage, uint8 comissionPercentage, uint256 durationInDays, address tokenAddress) {
+        _setToken(tokenAddress);
+        _comissionPercentage = comissionPercentage;
+        _setSupplyAndDuration(supplyPercentage, durationInDays);
     }
 
     function changeSupplyAndDuration(uint256 supplyPercentage, uint256 durationInDays) external onlyOwner contractNotStarted {
-        setSupplyAndDuration(supplyPercentage, durationInDays);
+        _setSupplyAndDuration(supplyPercentage, durationInDays);
     }
 
     function changeToken(address newTokenAddress) external onlyOwner contractNotStarted{
-        setToken(newTokenAddress);
+        _setToken(newTokenAddress);
     }
 
     function initialize()
@@ -74,9 +74,9 @@ contract Staking is Ownable{
     // VARIABLES IN BYTES16 ARE USED FOR PRECISION CALCULATIONS WITH ABDKMATHQUAD LIBRARY
 
     IERC20 private _token;
-    bytes16 private _distributedRewards; // S value in the Article Paper
-    bytes16 private _dailyReward; // Amount of tokens that will be distributed among all users in 1 Day 
-    bytes16 private _totalRewardsInBytes; // Total rewards with float precision
+    uint8 public _comissionPercentage;
+    uint256 private _distributedRewards; // S value in the Article Paper
+    uint256 private _dailyReward; // Amount of tokens that will be distributed among all users in 1 Day 
     uint256 private _initialSupply; // Amount of tokens allocated for Staking contract use
     uint256 private _contractDurationInDays; // Duration of contract in days
     uint256 private _startDate; // Timestamp of the start day of the contract
@@ -89,7 +89,7 @@ contract Staking is Ownable{
     uint256 private _collectedComission;
     bool private _stakingStarted; // The boolean to check if the staking contract has been initialized and started the work process
     bool private _distributionEnded; // This boolean is used to control the work of distribuiteRewards() function
-    mapping(address => mapping(uint256 => bytes16)) private _distributedRewardsSnapshot; // S0 value in the Article Paper
+    mapping(address => mapping(uint256 => uint256)) private _distributedRewardsSnapshot; // S0 value in the Article Paper
     mapping(address => mapping(uint256 => uint256)) private _stake; // Keeps record of user's made stakings. Note that every new staking is considered as a seperate _stake transaction
     mapping(address => uint256) private _stakesCount; // Total number of accomplished stakes by a specific user
     
@@ -152,8 +152,9 @@ contract Staking is Ownable{
 
     function transferTokensToContract(uint256 amount) public onlyOwner
     {
-        _token.safeTransferFrom(_msgSender(), address(this), amount);
-        emit TokensTransferedToStakingBalance(_msgSender(), amount);
+        address owner = _msgSender();
+        _token.safeTransferFrom(owner, address(this), amount);
+        emit TokensTransferedToStakingBalance(owner, amount);
     }
 
    function isStakeHolder(address stakeholder) public view returns(bool) {
@@ -168,6 +169,7 @@ contract Staking is Ownable{
         require(_stakeHolder != address(0), "Staking: No zero address is allowed");
         require(stakeAmount >= toKiloToken(10000), "Staking: Minimal stake value is 10 000 euphoria tokens");
         uint256 stakeId = _stakesCount[_stakeHolder];
+        uint256 currentDay = _getCurrentDay();
         _token.safeTransferFrom(_stakeHolder, address(this), stakeAmount);
 
         if(!isStakeHolder(_stakeHolder))
@@ -175,7 +177,7 @@ contract Staking is Ownable{
             _stakeHoldersCount += 1; 
             emit StakeHolderAdded(_stakeHolder);
         }
-        if(!_distributionEnded && getCurrentDay() != _lastActiveDay) {
+        if(!_distributionEnded && currentDay != _lastActiveDay) {
             _distributeRewards();
         }
 
@@ -185,7 +187,7 @@ contract Staking is Ownable{
         _totalStakes += stakeAmount;
         _stakesCount[_stakeHolder] += 1;
 
-        if(_previousTotalStakes == 0 || getCurrentDay() == _lastActiveDay) {
+        if(_previousTotalStakes == 0 || currentDay == _lastActiveDay) {
             _previousTotalStakes = _totalStakes;
         }
 
@@ -210,7 +212,6 @@ contract Staking is Ownable{
     function unStake() external contractStarted returns (bool) {
         address _stakeHolder = _msgSender();
         uint256 userStakesCount = _stakesCount[_stakeHolder];
-        bytes16 rewardInBytes;
         uint256 reward;
         uint256 withdrawAmount;
         uint256 totalDeposited;
@@ -218,7 +219,7 @@ contract Staking is Ownable{
 
         if(!_distributionEnded)
         {
-            if(getCurrentDay() != _lastActiveDay) {
+            if(_getCurrentDay() != _lastActiveDay) {
                 _distributeRewards();
             }
             
@@ -228,23 +229,18 @@ contract Staking is Ownable{
         // Calculation of User reward
         for(uint i = 0; i < userStakesCount; i++) {
             uint256 deposited = _stake[_stakeHolder][i];
-            rewardInBytes = ABDKMathQuad.add(rewardInBytes, ABDKMathQuad.mul(ABDKMathQuad.fromUInt(deposited), ABDKMathQuad.sub(_distributedRewards, _distributedRewardsSnapshot[_stakeHolder][i])));
+            reward += (deposited * (_distributedRewards - _distributedRewardsSnapshot[_stakeHolder][i])) / PRECISION;
             totalDeposited += deposited;
         }
 
-        reward = ABDKMathQuad.toUInt(rewardInBytes);
         require(reward > 0, "Staking: Address does not have any rewarded tokens in his balance");
 
-        _totalRewardsInBytes = ABDKMathQuad.add(_totalRewardsInBytes, rewardInBytes);
         _totalRewards += reward;
-        uint256 addition = ABDKMathQuad.toUInt(_totalRewardsInBytes) - _totalRewards;
-        reward += addition;
-        _totalRewards += addition;
-
+        
         _totalStakes -= totalDeposited;
         _previousTotalStakes = _totalStakes;
         
-        uint256 comission = (reward * COMISSION_PERCENTAGE) / 100;
+        uint256 comission = (reward * _comissionPercentage) / 100;
         _collectedComission += comission;
 
         withdrawAmount = (reward + totalDeposited) - comission;
@@ -293,16 +289,15 @@ contract Staking is Ownable{
        emit StakeHolderRemoved(stakeholder);
    }
 
-   function setSupplyAndDuration(uint256 supplyPercentage, uint256 durationInDays) private contractNotStarted {
+   function _setSupplyAndDuration(uint256 supplyPercentage, uint256 durationInDays) private contractNotStarted {
        require(durationInDays > 0, "Staking: Duration cannot be a zero value");
        require(supplyPercentage > 0, "Staking: Supply percentage cannot be a zero value");
         _contractDurationInDays = durationInDays;
-        bytes16 initialSupplyInBytes = ABDKMathQuad.div(ABDKMathQuad.fromUInt(_token.totalSupply() * supplyPercentage), ABDKMathQuad.fromUInt(100));
-        _initialSupply = ABDKMathQuad.toUInt(initialSupplyInBytes);
-        _dailyReward = ABDKMathQuad.div(initialSupplyInBytes, ABDKMathQuad.fromUInt(_contractDurationInDays));
+        _initialSupply = (_token.totalSupply() * supplyPercentage) / 100;
+        _dailyReward = _initialSupply / _contractDurationInDays;
    }
 
-   function setToken(address newTokenAddress) private contractNotStarted {
+   function _setToken(address newTokenAddress) private contractNotStarted {
         require(
             address(_token) != newTokenAddress,
             "Staking: Cannot change token of same address"
@@ -310,7 +305,7 @@ contract Staking is Ownable{
         _token = IERC20(newTokenAddress);
     }
 
-    function getCurrentDay() private view returns (uint256) 
+    function _getCurrentDay() private view returns (uint256) 
     {
         return (block.timestamp - _startDate) / 86400;    
     }
@@ -319,7 +314,7 @@ contract Staking is Ownable{
         private
         contractStarted
     {
-        uint256 currentDay = getCurrentDay();
+        uint256 currentDay = _getCurrentDay();
         uint256 passedDays;
 
         if(_lastActiveDay == currentDay || _lastActiveDay == _contractDurationInDays + _daysInPause) return;
@@ -331,9 +326,8 @@ contract Staking is Ownable{
             passedDays = currentDay - _lastActiveDay;
         }
 
-        //MATH BELOW LOOKS LIKE -> _distributedRewards += ((dailyReward * passedDays) / _previousTotalStakes)
-        _distributedRewards = ABDKMathQuad.add(_distributedRewards, ABDKMathQuad.div(ABDKMathQuad.mul(_dailyReward, ABDKMathQuad.fromUInt(passedDays)), ABDKMathQuad.fromUInt(_previousTotalStakes)));
-        
+        _distributedRewards += (_dailyReward * passedDays * PRECISION) / _previousTotalStakes;
+
         _lastActiveDay = currentDay;
         _previousTotalStakes = _totalStakes;
 
