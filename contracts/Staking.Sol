@@ -66,7 +66,7 @@ contract Staking is Ownable{
     {
         require(_stakingStarted == false, "Staking: The staking contract has been already initialized");
         _stakingStarted = true;
-        _startDate = block.timestamp - (block.timestamp % 86400);
+        _startDate = block.timestamp - (block.timestamp % 1 days );
         transferTokensToContract(_initialSupply);
     }
 
@@ -307,7 +307,7 @@ contract Staking is Ownable{
 
     function _getCurrentDay() private view returns (uint256) 
     {
-        return (block.timestamp - _startDate) / 86400;    
+        return (block.timestamp - _startDate) / 1 days;    
     }
 
     function _distributeRewards()
