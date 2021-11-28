@@ -14,8 +14,7 @@ contract Staking is Ownable{
     modifier contractExpired() {
         uint256 currentDay = _getCurrentDay();
         if(_totalStakes == 0) {
-            uint256 pausedDays = currentDay - _lastActiveDay;
-            _daysInPause += pausedDays == 0 ? 0 : pausedDays - 1;
+            _daysInPause += currentDay - _lastActiveDay;
             _lastActiveDay = currentDay;
         }
         require(currentDay - _daysInPause >= _contractDurationInDays && _totalStakes == 0, "Staking: The staking contract is not yet expired");
@@ -25,8 +24,7 @@ contract Staking is Ownable{
     modifier contractNotExpired() {
         uint256 currentDay = _getCurrentDay();
         if(_totalStakes == 0) {
-            uint256 pausedDays = currentDay - _lastActiveDay;
-            _daysInPause += pausedDays == 0 ? 0 : pausedDays - 1;
+            _daysInPause += currentDay - _lastActiveDay;
             _lastActiveDay = currentDay;
         }
         require(currentDay - _daysInPause < _contractDurationInDays, "Staking: The staking contract has already expired");
@@ -45,13 +43,13 @@ contract Staking is Ownable{
 
     // <================================ CONSTRUCTOR AND INITIALIZER ================================>
 
-    constructor(uint256 supplyPercentage, uint8 comissionPercentage, uint256 durationInDays, address tokenAddress) {
+    constructor(uint256 supplyPercentage, uint8 comissionPercentage, uint16 durationInDays, address tokenAddress) {
         _setToken(tokenAddress);
         _comissionPercentage = comissionPercentage;
         _setSupplyAndDuration(supplyPercentage, durationInDays);
     }
 
-    function changeSupplyAndDuration(uint256 supplyPercentage, uint256 durationInDays) external onlyOwner contractNotStarted {
+    function changeSupplyAndDuration(uint256 supplyPercentage, uint16 durationInDays) external onlyOwner contractNotStarted {
         _setSupplyAndDuration(supplyPercentage, durationInDays);
     }
 
@@ -75,34 +73,29 @@ contract Staking is Ownable{
 
     IERC20 private _token;
     uint8 public _comissionPercentage;
-    uint256 private _distributedRewards; // S value in the Article Paper
-    uint256 private _dailyReward; // Amount of tokens that will be distributed among all users in 1 Day 
-    uint256 private _initialSupply; // Amount of tokens allocated for Staking contract use
-    uint256 private _contractDurationInDays; // Duration of contract in days
-    uint256 private _startDate; // Timestamp of the start day of the contract
-    uint256 private _totalStakes; // Represents the total amount of staked Tokens. T value in the Article Paper. Find source of the article on top comment
-    uint256 private _previousTotalStakes; // Represents the previous state of total amount of staked Tokens 
-    uint256 private _lastActiveDay; // Represents the last day of last activity
-    uint256 private _stakeHoldersCount; // Total number of stake holders (users)
-    uint256 private _daysInPause; // Number of days with no active stakes. If there were no stakes on a specific day, then no reward is distributed and the duration of contract is extended to plus one day
-    uint256 private _totalRewards; // The total amount of rewards that have already been distributed
-    uint256 private _collectedComission;
+    uint16 public _contractDurationInDays; // Duration of contract in days
     bool private _stakingStarted; // The boolean to check if the staking contract has been initialized and started the work process
     bool private _distributionEnded; // This boolean is used to control the work of distribuiteRewards() function
     mapping(address => mapping(uint256 => uint256)) private _distributedRewardsSnapshot; // S0 value in the Article Paper
     mapping(address => mapping(uint256 => uint256)) private _stake; // Keeps record of user's made stakings. Note that every new staking is considered as a seperate _stake transaction
     mapping(address => uint256) private _stakesCount; // Total number of accomplished stakes by a specific user
+    mapping(address => uint16) private _stakedDay;
+    uint256 private _distributedRewards; // S value in the Article Paper
+    uint256 public _dailyReward; // Amount of tokens that will be distributed among all users in 1 Day 
+    uint256 public _initialSupply; // Amount of tokens allocated for Staking contract use
+    uint256 public _startDate; // Timestamp of the start day of the contract
+    uint256 public _totalStakes; // Represents the total amount of staked Tokens. T value in the Article Paper. Find source of the article on top comment
+    uint256 private _previousTotalStakes; // Represents the previous state of total amount of staked Tokens 
+    uint256 private _lastActiveDay; // Represents the last day of last activity
+    uint256 public _stakeHoldersCount; // Total number of stake holders (users)
+    uint256 public _daysInPause; // Number of days with no active stakes. If there were no stakes on a specific day, then no reward is distributed and the duration of contract is extended to plus one day
+    uint256 private _totalRewards; // The total amount of rewards that have already been distributed
+    uint256 private _collectedComission;
     
     // <================================ EVENTS ================================>
     event StakeCreated(address indexed stakeHolder, uint256 indexed stake);
 
-    event RewardsDistributed(uint256 indexed currentDay);
-
     event UnStaked(address indexed stakeHolder, uint256 indexed withdrawAmount);
-
-    event StakeHolderAdded(address indexed stakeHolder);
-
-    event StakeHolderRemoved(address indexed stakeHolder);
 
     event TokensTransferedToStakingBalance(address indexed sender, uint256 indexed amount);
 
@@ -110,31 +103,43 @@ contract Staking is Ownable{
 
     // <<<================================= GETTERS =================================>>>
 
-    function getStartDayOfContract() external view returns(uint256) {
-        return _startDate;
+    function calculateReward() external contractStarted view returns (uint256) {
+        address _stakeHolder = _msgSender();
+        uint256 userStakesCount = _stakesCount[_stakeHolder];
+        uint256 reward;
+        uint256 distributedRewards = _distributedRewards;
+        uint256 withdrawAmount;
+        uint256 totalDeposited;
+        uint256 currentDay = _getCurrentDay();
+        uint256 passedDays;
+        require(userStakesCount != 0, "Staking: This user must be a stake holder");
+
+        if (currentDay - _daysInPause > _contractDurationInDays) {
+            passedDays = _contractDurationInDays - (_lastActiveDay - _daysInPause);
+        } else {
+            passedDays = currentDay - _lastActiveDay;
+        }
+
+        distributedRewards += (_dailyReward * passedDays * PRECISION) / _previousTotalStakes;
+
+        // Calculation of User reward
+        for(uint i = 0; i < userStakesCount; i++) {
+            uint256 deposited = _stake[_stakeHolder][i];
+            reward += (deposited * (distributedRewards - _distributedRewardsSnapshot[_stakeHolder][i])) / PRECISION;
+            totalDeposited += deposited;
+        }
+
+        uint256 comission = (reward * _comissionPercentage) / 100;
+        withdrawAmount = (reward + totalDeposited) - comission;
+
+        return withdrawAmount;
     }
 
-    function getDurationOfContract() external view returns(uint256) {
-        return _contractDurationInDays;
+    function canUserUnstake(address stakeHolder) external view returns(bool) {
+        return _getCurrentDay() > _stakedDay[stakeHolder];
     }
 
-    function getDaysInPause() external view returns(uint256) {
-        return _daysInPause;
-    }
-
-    function getInitialSupply() external view returns(uint256) {
-        return _initialSupply;
-    }
-
-    function getTotalStakes() external view returns(uint256) {
-        return _totalStakes;
-    }
-
-    function getStakeHoldersCount() external view returns(uint256) {
-        return _stakeHoldersCount;
-    }
-
-    function getUserStakesCount(address stakeHolder) external view returns(uint256) {
+    function getUserStakesAmount(address stakeHolder) external view returns(uint256) {
         uint256 result;
 
         for(uint i = 0; i < _stakesCount[stakeHolder]; i++) {
@@ -143,10 +148,6 @@ contract Staking is Ownable{
 
         return result;
     }
-
-    function getBalanceOfContract() external onlyOwner view returns(uint256){
-       return _token.balanceOf(address(this));
-   }
 
     // <<<================================= END OF GETTERS =================================>>>
 
@@ -175,7 +176,6 @@ contract Staking is Ownable{
         if(!isStakeHolder(_stakeHolder))
         { 
             _stakeHoldersCount += 1; 
-            emit StakeHolderAdded(_stakeHolder);
         }
         if(!_distributionEnded && currentDay != _lastActiveDay) {
             _distributeRewards();
@@ -189,6 +189,10 @@ contract Staking is Ownable{
 
         if(_previousTotalStakes == 0 || currentDay == _lastActiveDay) {
             _previousTotalStakes = _totalStakes;
+        }
+
+        if(_stakedDay[_stakeHolder] == 0){
+            _stakedDay[_stakeHolder] = uint16(currentDay);
         }
 
         emit StakeCreated(_stakeHolder, stakeAmount);
@@ -211,6 +215,8 @@ contract Staking is Ownable{
 
     function unStake() external contractStarted returns (bool) {
         address _stakeHolder = _msgSender();
+        require(_stakeHolder != address(0), "Staking: Zero address is prohibited");
+        require(isStakeHolder(_stakeHolder), "Staking: There is not any stake holder with provided address");
         uint256 userStakesCount = _stakesCount[_stakeHolder];
         uint256 reward;
         uint256 withdrawAmount;
@@ -222,8 +228,6 @@ contract Staking is Ownable{
             if(_getCurrentDay() != _lastActiveDay) {
                 _distributeRewards();
             }
-            
-            _distributeRewards();
         }
 
         // Calculation of User reward
@@ -282,14 +286,13 @@ contract Staking is Ownable{
                delete _stake[stakeholder][i];
                delete _distributedRewardsSnapshot[stakeholder][i];
            }
+           delete _stakedDay[stakeholder];
            delete _stakesCount[stakeholder];
            _stakeHoldersCount -= 1;
        }
-
-       emit StakeHolderRemoved(stakeholder);
    }
 
-   function _setSupplyAndDuration(uint256 supplyPercentage, uint256 durationInDays) private contractNotStarted {
+   function _setSupplyAndDuration(uint256 supplyPercentage, uint16 durationInDays) private contractNotStarted {
        require(durationInDays > 0, "Staking: Duration cannot be a zero value");
        require(supplyPercentage > 0, "Staking: Supply percentage cannot be a zero value");
         _contractDurationInDays = durationInDays;
@@ -321,7 +324,7 @@ contract Staking is Ownable{
         
         if (currentDay - _daysInPause > _contractDurationInDays) {
             _distributionEnded = true;
-            passedDays = _contractDurationInDays - _lastActiveDay - _daysInPause;
+            passedDays = _contractDurationInDays - (_lastActiveDay - _daysInPause);
         } else {
             passedDays = currentDay - _lastActiveDay;
         }
@@ -329,8 +332,5 @@ contract Staking is Ownable{
         _distributedRewards += (_dailyReward * passedDays * PRECISION) / _previousTotalStakes;
 
         _lastActiveDay = currentDay;
-        _previousTotalStakes = _totalStakes;
-
-        emit RewardsDistributed(currentDay);
     }
 }
