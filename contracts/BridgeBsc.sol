@@ -5,13 +5,10 @@ pragma solidity >=0.8.0 <0.9.0;
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-//SafeMath in this contract IS USED ONLY IN RISKY CALCULATIONS . However, the use of this library is not mandatory on solidity 0.8.0 or higher
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 interface IBEP20 is IERC20 {}
 
 contract BridgeBsc is Ownable, Pausable {
-    using SafeMath for uint256;
     IBEP20 private _token;
     uint256 _unlockedTokensAmount; // Represents the total amount of unlocked tokens
     uint256 _maxTotalSupply; // Maximum allowed amount of tokens
@@ -62,7 +59,7 @@ contract BridgeBsc is Ownable, Pausable {
             "BSC bridge: cannot lock more than total amount of unlocked tokens"
         );
         _lock(sender, address(this), amount);
-        _unlockedTokensAmount = _unlockedTokensAmount.sub(amount);
+        _unlockedTokensAmount -= amount;
         emit TokenLocked(sender, amount, block.timestamp, LOCK, VALIDATOR);
     }
 
@@ -84,12 +81,12 @@ contract BridgeBsc is Ownable, Pausable {
         );
         
         require(
-            _maxTotalSupply >= _unlockedTokensAmount.add(amount),
+            _maxTotalSupply >= _unlockedTokensAmount + amount,
             "BSC bridge: Cannot unlock more than maximum total supply amount"
         );
         
         _convertProcess[nonce] = true;
-        _unlockedTokensAmount = _unlockedTokensAmount.add(amount);
+        _unlockedTokensAmount += amount;
         _unlockToken(to, amount);
         emit TokenUnlocked(to, amount, block.timestamp, UNLOCK, VALIDATOR);
     }

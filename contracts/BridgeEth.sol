@@ -5,8 +5,6 @@ pragma solidity >=0.8.0 <0.9.0;
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-//SafeMath in this contract IS USED ONLY IN RISKY CALCULATIONS . However, the use of this library is not mandatory on solidity 0.8.0 or higher
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 // IERC20P enhances IERC20 interface with mint burn and burnFrom methods. P stands for Plus (or Enhanced)
 interface IERC20P is IERC20 {
@@ -18,7 +16,6 @@ interface IERC20P is IERC20 {
 }
 
 contract BridgeEth is Ownable, Pausable {
-    using SafeMath for uint256;
     IERC20P private _token;
     uint256 _mintedTokensAmount; // Represents the total amount of unlocked tokens
     uint256 _maxTotalSupply; // Maximum allowed amount of tokens
@@ -69,7 +66,7 @@ contract BridgeEth is Ownable, Pausable {
             "ETH bridge: cannot burn more than total amount of minted tokens"
         );
         _burn(sender, amount);
-        _mintedTokensAmount = _mintedTokensAmount.sub(amount);
+        _mintedTokensAmount -= amount;
 
         emit TokenBurned(sender, amount, block.timestamp, BURN, VALIDATOR);
     }
@@ -91,12 +88,12 @@ contract BridgeEth is Ownable, Pausable {
             "ETH bridge: Unkown validator off-chain"
         );
         require(
-            _maxTotalSupply >= _mintedTokensAmount.add(amount),
+            _maxTotalSupply >= _mintedTokensAmount + amount,
             "ETH bridge: Cannot mint more than maximum total supply amount"
         );
         _convertProcess[nonce] = true;
         _mint(to, amount);
-        _mintedTokensAmount = _mintedTokensAmount.add(amount);
+        _mintedTokensAmount += amount;
 
         emit TokenMinted(to, amount, block.timestamp, MINT, VALIDATOR);
     }

@@ -43,9 +43,8 @@ contract Staking is Ownable{
 
     // <================================ CONSTRUCTOR AND INITIALIZER ================================>
 
-    constructor(uint256 supplyPercentage, uint8 comissionPercentage, uint16 durationInDays, address tokenAddress) {
+    constructor(uint256 supplyPercentage, uint16 durationInDays, address tokenAddress) {
         _setToken(tokenAddress);
-        _comissionPercentage = comissionPercentage;
         _setSupplyAndDuration(supplyPercentage, durationInDays);
     }
 
@@ -72,14 +71,16 @@ contract Staking is Ownable{
     // VARIABLES IN BYTES16 ARE USED FOR PRECISION CALCULATIONS WITH ABDKMATHQUAD LIBRARY
 
     IERC20 private _token;
-    uint8 public _comissionPercentage;
     uint16 public _contractDurationInDays; // Duration of contract in days
     bool private _stakingStarted; // The boolean to check if the staking contract has been initialized and started the work process
     bool private _distributionEnded; // This boolean is used to control the work of distribuiteRewards() function
     mapping(address => mapping(uint256 => uint256)) private _distributedRewardsSnapshot; // S0 value in the Article Paper
     mapping(address => mapping(uint256 => uint256)) private _stake; // Keeps record of user's made stakings. Note that every new staking is considered as a seperate _stake transaction
+    mapping(address => uint256) public _totalStakesAmount;
+    mapping(address => uint256) public _lpTotalStakesAmount;
     mapping(address => uint256) private _stakesCount; // Total number of accomplished stakes by a specific user
     mapping(address => uint16) private _stakedDay;
+    mapping(address => bool) private _isLiquidityProvider;
     uint256 private _distributedRewards; // S value in the Article Paper
     uint256 public _dailyReward; // Amount of tokens that will be distributed among all users in 1 Day 
     uint256 public _initialSupply; // Amount of tokens allocated for Staking contract use
@@ -90,7 +91,6 @@ contract Staking is Ownable{
     uint256 public _stakeHoldersCount; // Total number of stake holders (users)
     uint256 public _daysInPause; // Number of days with no active stakes. If there were no stakes on a specific day, then no reward is distributed and the duration of contract is extended to plus one day
     uint256 private _totalRewards; // The total amount of rewards that have already been distributed
-    uint256 private _collectedComission;
     
     // <================================ EVENTS ================================>
     event StakeCreated(address indexed stakeHolder, uint256 indexed stake);
@@ -106,10 +106,12 @@ contract Staking is Ownable{
     function calculateReward() external contractStarted view returns (uint256) {
         address _stakeHolder = _msgSender();
         uint256 userStakesCount = _stakesCount[_stakeHolder];
+        uint256 userStakesCountLP = _stakesCount[_stakeHolder];
         uint256 reward;
         uint256 distributedRewards = _distributedRewards;
         uint256 withdrawAmount;
         uint256 totalDeposited;
+        uint256 totalDepositedLP;
         uint256 currentDay = _getCurrentDay();
         uint256 passedDays;
         require(userStakesCount != 0, "Staking: This user must be a stake holder");
@@ -129,8 +131,11 @@ contract Staking is Ownable{
             totalDeposited += deposited;
         }
 
-        uint256 comission = (reward * _comissionPercentage) / 100;
-        withdrawAmount = (reward + totalDeposited) - comission;
+        if(reward > 0) {
+            withdrawAmount = _isLiquidityProvider[_stakeHolder] ? reward : reward + totalDeposited;
+        } else {
+            withdrawAmount = _isLiquidityProvider[_stakeHolder] ? 0 : totalDeposited;
+        }
 
         return withdrawAmount;
     }
@@ -149,6 +154,14 @@ contract Staking is Ownable{
         return result;
     }
 
+    function getLiquidityProvider(address _stakeHolder)
+        external
+        view
+    returns(bool) 
+    {
+        return _isLiquidityProvider[_stakeHolder];
+    }
+
     // <<<================================= END OF GETTERS =================================>>>
 
     function transferTokensToContract(uint256 amount) public onlyOwner
@@ -159,101 +172,60 @@ contract Staking is Ownable{
     }
 
    function isStakeHolder(address stakeholder) public view returns(bool) {
-       if(_stake[stakeholder][0] != 0 && _stakesCount[stakeholder] != 0) {
-           return true;
-       }
+        if(_stakesCount[stakeholder] != 0) {
+            return true;
+        }
+       
        return false;
    }
 
-   function createStake(uint256 stakeAmount) external contractStarted contractNotExpired returns (bool) {
-        address _stakeHolder = _msgSender();
-        require(_stakeHolder != address(0), "Staking: No zero address is allowed");
-        require(stakeAmount >= toKiloToken(10000), "Staking: Minimal stake value is 10 000 euphoria tokens");
-        uint256 stakeId = _stakesCount[_stakeHolder];
-        uint256 currentDay = _getCurrentDay();
-        _token.safeTransferFrom(_stakeHolder, address(this), stakeAmount);
-
-        if(!isStakeHolder(_stakeHolder))
-        { 
-            _stakeHoldersCount += 1; 
-        }
-        if(!_distributionEnded && currentDay != _lastActiveDay) {
-            _distributeRewards();
-        }
-
-        _stake[_stakeHolder][stakeId] = stakeAmount;
-        _distributedRewardsSnapshot[_stakeHolder][stakeId] = _distributedRewards;
-       
-        _totalStakes += stakeAmount;
-        _stakesCount[_stakeHolder] += 1;
-
-        if(_previousTotalStakes == 0 || currentDay == _lastActiveDay) {
-            _previousTotalStakes = _totalStakes;
-        }
-
-        if(_stakedDay[_stakeHolder] == 0){
-            _stakedDay[_stakeHolder] = uint16(currentDay);
-        }
-
-        emit StakeCreated(_stakeHolder, stakeAmount);
+    function createStake(uint256 stakeAmount)
+       external
+       contractStarted
+       contractNotExpired
+       returns (bool) 
+    {
+        address sender = _msgSender();
+        _token.safeTransferFrom(sender, address(this), stakeAmount);
+        require(_createStake(sender, stakeAmount, false), "Staking: Couldn't create stake");
 
         return true;
-   }
+    }
 
-    function _withdrawComission() external onlyOwner contractStarted returns(bool) {
-        address owner = _msgSender();
-        uint256 contractBalance = _token.balanceOf(address(this));
-        require(contractBalance > 0, "Staking: Nothing to withdraw. Contract's token balance is empty");
-        _token.safeTransfer(owner, _collectedComission);
+    function createStakeLP(address stakeHolder, uint256 stakeAmount)
+       external
+       contractStarted
+       contractNotExpired
+       returns (bool) 
+    {
+        require(_createStake(stakeHolder, stakeAmount, true), "Staking: Couldn't create stake");
+        _isLiquidityProvider[stakeHolder] = true;
 
         return true;
+    }
+
+    function unStake()
+        external
+        contractStarted
+        returns (bool)
+    {
+        return _unStake(_msgSender(), false);
+    }
+
+    function unStakeLP(address stakeHolder)
+        external
+        contractStarted
+        returns (bool)
+    {
+        require(_isLiquidityProvider[stakeHolder], "Staking: This user is not a liquidity provider");
+        return _unStake(stakeHolder, true);
     }
 
     function finalize() external onlyOwner contractStarted contractExpired {
-        selfdestruct(payable(_msgSender()));
-    }
-
-    function unStake() external contractStarted returns (bool) {
-        address _stakeHolder = _msgSender();
-        require(_stakeHolder != address(0), "Staking: Zero address is prohibited");
-        require(isStakeHolder(_stakeHolder), "Staking: There is not any stake holder with provided address");
-        uint256 userStakesCount = _stakesCount[_stakeHolder];
-        uint256 reward;
-        uint256 withdrawAmount;
-        uint256 totalDeposited;
-        require(userStakesCount != 0, "Staking: This user must be a stake holder");
-
-        if(!_distributionEnded)
-        {
-            if(_getCurrentDay() != _lastActiveDay) {
-                _distributeRewards();
-            }
-        }
-
-        // Calculation of User reward
-        for(uint i = 0; i < userStakesCount; i++) {
-            uint256 deposited = _stake[_stakeHolder][i];
-            reward += (deposited * (_distributedRewards - _distributedRewardsSnapshot[_stakeHolder][i])) / PRECISION;
-            totalDeposited += deposited;
-        }
-
-        require(reward > 0, "Staking: Address does not have any rewarded tokens in his balance");
-
-        _totalRewards += reward;
-        
-        _totalStakes -= totalDeposited;
-        _previousTotalStakes = _totalStakes;
-        
-        uint256 comission = (reward * _comissionPercentage) / 100;
-        _collectedComission += comission;
-
-        withdrawAmount = (reward + totalDeposited) - comission;
-        _token.safeTransfer(_stakeHolder, withdrawAmount);
-
-        removeStakeHolder(_stakeHolder);
-        emit UnStaked(_stakeHolder, withdrawAmount);
-
-        return true;
+        address owner = _msgSender();
+        uint256 balanceEUPH = _token.balanceOf(address(this));
+        if(balanceEUPH > 0)  _token.safeTransfer(owner, balanceEUPH);
+        selfdestruct(payable(owner));
     }
 
     // <================================ INTERNAL FUNCTIONS ================================>
@@ -281,26 +253,27 @@ contract Staking is Ownable{
        bool _isStakeHolder = isStakeHolder(stakeholder);
        require(_isStakeHolder == true, "Staking: There is not any stake holder with provided address");
 
-       if(_isStakeHolder) {
-           for(uint i = 0; i < _stakesCount[stakeholder]; i++) {
-               delete _stake[stakeholder][i];
-               delete _distributedRewardsSnapshot[stakeholder][i];
-           }
-           delete _stakedDay[stakeholder];
-           delete _stakesCount[stakeholder];
-           _stakeHoldersCount -= 1;
-       }
+        for(uint i = 0; i < _stakesCount[stakeholder]; i++) {
+            delete _stake[stakeholder][i];
+            delete _distributedRewardsSnapshot[stakeholder][i];
+        }
+        delete _stakesCount[stakeholder];
+        delete _lpTotalStakesAmount[stakeholder];
+        delete _totalStakesAmount[stakeholder];
+        
+        delete _stakedDay[stakeholder];
+        _stakeHoldersCount -= 1;
    }
 
-   function _setSupplyAndDuration(uint256 supplyPercentage, uint16 durationInDays) private contractNotStarted {
+   function _setSupplyAndDuration(uint256 supplyPercentage, uint16 durationInDays) private {
        require(durationInDays > 0, "Staking: Duration cannot be a zero value");
-       require(supplyPercentage > 0, "Staking: Supply percentage cannot be a zero value");
+       require(supplyPercentage > 0 && supplyPercentage <= 100, "Staking: Supply percentage can be in a range between 0 and 100");
         _contractDurationInDays = durationInDays;
         _initialSupply = (_token.totalSupply() * supplyPercentage) / 100;
         _dailyReward = _initialSupply / _contractDurationInDays;
    }
 
-   function _setToken(address newTokenAddress) private contractNotStarted {
+   function _setToken(address newTokenAddress) private {
         require(
             address(_token) != newTokenAddress,
             "Staking: Cannot change token of same address"
@@ -315,7 +288,6 @@ contract Staking is Ownable{
 
     function _distributeRewards()
         private
-        contractStarted
     {
         uint256 currentDay = _getCurrentDay();
         uint256 passedDays;
@@ -332,5 +304,102 @@ contract Staking is Ownable{
         _distributedRewards += (_dailyReward * passedDays * PRECISION) / _previousTotalStakes;
 
         _lastActiveDay = currentDay;
+    }
+
+    function _createStake(address stakeHolder, uint256 stakeAmount, bool isLP) private returns (bool) {
+        require(stakeHolder != address(0), "Staking: No zero address is allowed");
+        require(stakeAmount >= toKiloToken(10000), "Staking: Minimal stake value is 10 000 euphoria tokens");
+        uint256 stakeId = _stakesCount[stakeHolder];
+        uint256 currentDay = _getCurrentDay();
+
+        if(!isStakeHolder(stakeHolder))
+        { 
+            _stakeHoldersCount += 1;
+            _stakedDay[stakeHolder] = uint16(currentDay);
+        }
+        if(!_distributionEnded) {
+            if(currentDay != _lastActiveDay)
+            {
+                _distributeRewards();
+            }
+        }
+
+        _stake[stakeHolder][stakeId] = stakeAmount;
+        _distributedRewardsSnapshot[stakeHolder][stakeId] = _distributedRewards;
+        _stakesCount[stakeHolder] += 1;
+        
+        if(isLP){
+            _lpTotalStakesAmount[stakeHolder] += stakeAmount;
+        } else {
+            _totalStakesAmount[stakeHolder] += stakeAmount;
+        }
+        
+        _totalStakes += stakeAmount;
+
+        if(_previousTotalStakes == 0 || currentDay == _lastActiveDay) {
+            _previousTotalStakes = _totalStakes;
+        }
+
+        emit StakeCreated(stakeHolder, stakeAmount);
+
+        return true;
+   }
+
+   function _unStake(address stakeHolder, bool isLP) private returns (bool) {
+        require(stakeHolder != address(0), "Staking: Zero address is prohibited");
+        require(isStakeHolder(stakeHolder), "Staking: There is not any stake holder with provided address");
+        uint256 userStakesCount = _stakesCount[stakeHolder];
+        uint256 reward;
+        uint256 withdrawAmount;
+        uint256 totalDeposited;
+        uint256 totalStakesAmount = _totalStakesAmount[stakeHolder];
+        uint256 lpTotalStakesAmount = _lpTotalStakesAmount[stakeHolder];
+
+        if(!_distributionEnded)
+        {
+            if(_getCurrentDay() != _lastActiveDay) {
+                _distributeRewards();
+            }
+        }
+
+        // Calculation of User reward
+        for(uint i = 0; i < userStakesCount; i++) {
+            uint256 deposited = _stake[stakeHolder][i];
+            reward += (deposited * (_distributedRewards - _distributedRewardsSnapshot[stakeHolder][i])) / PRECISION;
+            totalDeposited += deposited;
+        }
+
+        _totalStakes -= isLP ? lpTotalStakesAmount : totalStakesAmount;
+        _previousTotalStakes = _totalStakes;
+
+        if(reward > 0) {
+            _totalRewards += reward;
+            withdrawAmount = isLP ? reward : reward + totalDeposited;
+        } else {
+            withdrawAmount = isLP ? 0 : totalDeposited;
+        }
+
+        if(withdrawAmount != 0) { _token.safeTransfer(stakeHolder, withdrawAmount); }
+        removeStakeHolder(stakeHolder);
+        
+        if(totalDeposited - totalStakesAmount != 0 || totalDeposited - lpTotalStakesAmount != 0)
+        {
+            if(totalDeposited - totalStakesAmount != 0 && totalDeposited - lpTotalStakesAmount == 0)
+            {
+                _stake[stakeHolder][0] = totalDeposited - totalStakesAmount;
+                _lpTotalStakesAmount[stakeHolder] = totalDeposited - totalStakesAmount;
+            } else {
+                _stake[stakeHolder][0] = totalDeposited - lpTotalStakesAmount;
+                _totalStakesAmount[stakeHolder] = totalDeposited - lpTotalStakesAmount;
+            }
+            
+            _distributedRewardsSnapshot[stakeHolder][0] = _distributedRewards;
+            _stakesCount[stakeHolder] = 1;
+            _stakeHoldersCount += 1;
+        }
+
+        emit UnStaked(stakeHolder, withdrawAmount);
+
+        return true;
     }
 }
