@@ -7,35 +7,9 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 //This smart contract's reward distribution algorithm was based on this article
 //https://uploads-ssl.webflow.com/5ad71ffeb79acc67c8bcdaba/5ad8d1193a40977462982470_scalable-reward-distribution-paper.pdf
 
-/*
-NOTE FOR PEOPLE WHO WILL EXAMINE THE CODE. THIS CONTRACT IS MAIN STAKING SYSTEM 
-IN EUPHORIA APPLICATION, THERE ARE TWO WAYS TO PARTICIPATE IN STAKING SYSTEM:
-    1) DIRECTLY THROUGH THE CALL OF THIS CONTRACT
-    2) VIA LP STAKING CONTRACT. LP STAKING CONTRACT MAKES IT POSSIBLE FOR USERS
-    TO PROVIDE LIQUIDITY ON PANCAKESWAP. IF USER BECOMES A LIQUIDITY PROVIDER (LP),
-    THEN HE AUTOMATICALLY BECOMES A PARTICIPATOR OF BASE STAKING SYSTEM (WHICH IS THIS CONTRACT)
-
-THAT'S WHY THERE ARE TWO SAME METHODS FOR DIFFERENT TYPE OF USERS createStake()/createStakeLP() and unStake()/unStakeLP()
-THIS IS DONE TO SEPERATE LP USERS FROM ORDINARY STAKER USERS. HOWEVER, EUPHORIA USER CAN BE BOTH LP AND NORMAL STAKER AT THE SAME TIME
-
-** THE FOLLOWING EXAMPLE APPLIES TO USERS WHO DECIDE TO STAKE TOKENS USING 2 METHODS TOGETHER **
-
-IF USER STAKES 15 000 TOKENS VIA METHOD 1 AND ANOTHER 10 000 TOKENS VIA METHOD 2, THEN HIS TOTAL STAKES AMOUNT WILL BE EQUAL TOO 25 000
-AND HE WILL GAIN REWARDS BASED ON HIS TOTAL STAKE AMOUNT. IT MEANS THAT, EVEN THOUGH USER'S NORMAL STAKES AMOUNT AND LP STAKES AMOUNT
-ARE DIFFERENT AND SEPERATED, THEY ARE COMBINED WHEN IT COMES TO UNSTAKE. 
-
-HAVING OUR ABOVE EXAMPLE IN MIND, WHEN USER UNSTAKES VIA unStake() METHOD, THEN HE WILL UNSTAKE HIS FULL REWARD FOR HIS TOTAL STAKE OF 25 000 TOKENS.
-HOWEVER, HIS 10 000 TOKENS LEFT FROM LP STAKING WILL CONTINUE EARNING REWARDS FROM THE BEGINNING. SINCE THE USER HAVE UNSTAKED HIS NORMAL STAKE PART VIA unStake() METHOD,
-IN ORDER TO UNSTAKE HIS LEFT 10 000 TOKENS, HE HAS TO UNSTAKE IT VIA unStakeLP() METHOD
-
-IF THE USER UNSTAKES WHEN THE CONTRACT DURATION IS EXPIRED, THEN HIS REMAINING STAKED TOKENS (IF THERE ARE ANY) ARE BURNED AND HE STILL WILL RECEIVE THE FULL REWARD AMOUNT 
-
-isLP BOOLEAN CHECK IN METHODS REPRESENT IF THE INITIATOR OF CALL WAS USER OR LP STAKING CONTRACT
-*/
-
 contract Staking is Ownable{
     using SafeERC20 for IERC20;
-    uint64 constant PRECISION = 1000000000000;
+    uint64 constant PRECISION = 1000000000000000000;
 
     modifier contractExpired() {
         uint256 currentDay = _getCurrentDay();
@@ -82,10 +56,6 @@ contract Staking is Ownable{
         _setToken(newTokenAddress);
     }
 
-    function changeLpStakingContract(address newContractAddress) external onlyOwner {
-        _setLpStakingContract(newContractAddress);
-    }
-
     function initialize()
         external
         onlyOwner
@@ -101,12 +71,9 @@ contract Staking is Ownable{
     IERC20 private _token;
     bool private _stakingStarted; // The boolean to check if the staking contract has been initialized and started the work process
     bool private _distributionEnded; // This boolean is used to control the work of distribuiteRewards() function
-    address private _lpStakingContractAddress;
     uint256 public _contractDurationInDays; // Duration of contract in days
     mapping(address => mapping(uint256 => uint256)) private _distributedRewardsSnapshot; // S0 value in the Article Paper
     mapping(address => mapping(uint256 => uint256)) private _stake; // Keeps record of user's made stakings. Note that every new staking is considered as a seperate _stake transaction
-    mapping(address => uint256) public _userTotalStakes; // Total amount of normal stakes of user
-    mapping(address => uint256) public _userLpTotalStakes; // Total amount of normal stakes of user called by LP staking contract
     mapping(address => uint256) private _stakesCount; // Total number of accomplished stakes by a specific user
     mapping(address => uint16) private _stakedDay;
     uint256 private _distributedRewards; // S value in the Article Paper
@@ -131,7 +98,7 @@ contract Staking is Ownable{
 
     // <<<================================= GETTERS =================================>>>
     //THIS IS A CALL FUNCTION THAT RETURNS THE EXPECTED REWARD VALUE THAT USER WILL RECEIVE 
-    function calculateReward(bool isLP) external contractStarted view returns (uint256) {
+    function calculateReward() external contractStarted view returns (uint256) {
         address _stakeHolder = _msgSender();
         uint256 userStakesCount = _stakesCount[_stakeHolder];
         uint256 reward;
@@ -164,9 +131,9 @@ contract Staking is Ownable{
         }
 
         if(reward > 0) {
-            withdrawAmount = isLP ? reward : reward + totalDeposited;
+            withdrawAmount = reward + totalDeposited;
         } else {
-            withdrawAmount = isLP ? 0 : totalDeposited;
+            withdrawAmount = totalDeposited;
         }
 
         return withdrawAmount;
@@ -212,20 +179,7 @@ contract Staking is Ownable{
         address sender = _msgSender();
         require(sender != address(0), "Staking: No zero address is allowed");
         _token.safeTransferFrom(sender, address(this), stakeAmount);
-        require(_createStake(sender, stakeAmount, false), "Staking: Couldn't create stake");
-
-        return true;
-    }
-
-    function createStakeLP(address stakeHolder, uint256 stakeAmount)
-       external
-       contractStarted
-       contractNotExpired
-       returns (bool) 
-    {
-        require(_msgSender() == _lpStakingContractAddress, "Staking: This method can only called by LP Staking contract");
-        require(stakeHolder != address(0), "Staking: No zero address is allowed");
-        require(_createStake(stakeHolder, stakeAmount, true), "Staking: Couldn't create stake");
+        require(_createStake(sender, stakeAmount), "Staking: Couldn't create stake");
 
         return true;
     }
@@ -237,20 +191,7 @@ contract Staking is Ownable{
     {
         address sender = _msgSender();
         require(isStakeHolder(sender), "Staking: There is not any stake holder with provided address");
-        require(_userTotalStakes[sender] > 0, "Staking: This user does not have any active stakes");
-        return _unStake(sender, false);
-    }
-
-    function unStakeLP(address stakeHolder)
-        external
-        contractStarted
-        returns (bool)
-    {
-        address sender = _msgSender();
-        require(sender == _lpStakingContractAddress, "Staking: This method can only called by LP Staking contract");
-        require(isStakeHolder(sender), "Staking: There is not any stake holder with provided address");
-        require(_userLpTotalStakes[sender] > 0, "Staking: This user does not have any active stakes");
-        return _unStake(stakeHolder, true);
+        return _unStake(sender);
     }
 
     function finalize() external onlyOwner contractStarted contractExpired {
@@ -280,13 +221,12 @@ contract Staking is Ownable{
 
     // <================================ PRIVATE FUNCTIONS ================================>
 
-    function removeStakeHolder(address stakeHolder, bool isLP) private contractStarted {
+    function removeStakeHolder(address stakeHolder) private contractStarted {
         for(uint i = 0; i < _stakesCount[stakeHolder]; i++) {
             delete _stake[stakeHolder][i];
             delete _distributedRewardsSnapshot[stakeHolder][i];
         }
         delete _stakesCount[stakeHolder];
-        isLP ? delete _userLpTotalStakes[stakeHolder] : delete _userTotalStakes[stakeHolder];
         
         delete _stakedDay[stakeHolder];
         _stakeHoldersCount -= 1;
@@ -306,14 +246,6 @@ contract Staking is Ownable{
             "Staking: Cannot change token of same address"
         );
         _token = IERC20(newTokenAddress);
-    }
-
-    function _setLpStakingContract(address newContractAddress) private {
-        require(
-            _lpStakingContractAddress != newContractAddress,
-            "Staking: Cannot change contract of same address"
-        );
-        _lpStakingContractAddress = newContractAddress;
     }
 
     function _getCurrentDay() private view returns (uint256) 
@@ -341,7 +273,7 @@ contract Staking is Ownable{
         _lastActiveDay = currentDay;
     }
 
-    function _createStake(address stakeHolder, uint256 stakeAmount, bool isLP) private returns (bool) {
+    function _createStake(address stakeHolder, uint256 stakeAmount) private returns (bool) {
         require(stakeAmount >= toKiloToken(10000), "Staking: Minimal stake value is 10 000 euphoria tokens");
         uint256 stakeId = _stakesCount[stakeHolder];
         uint256 currentDay = _getCurrentDay();
@@ -362,12 +294,6 @@ contract Staking is Ownable{
         _distributedRewardsSnapshot[stakeHolder][stakeId] = _distributedRewards;
         _stakesCount[stakeHolder] += 1;
         
-        if(isLP){
-            _userLpTotalStakes[stakeHolder] += stakeAmount;
-        } else {
-            _userTotalStakes[stakeHolder] += stakeAmount;
-        }
-        
         _totalStakes += stakeAmount;
 
         if(_previousTotalStakes == 0 || currentDay == _lastActiveDay) {
@@ -379,15 +305,13 @@ contract Staking is Ownable{
         return true;
    }
 
-   function _unStake(address stakeHolder, bool isLP) private returns (bool) {
+   function _unStake(address stakeHolder) private returns (bool) {
         require(stakeHolder != address(0), "Staking: Zero address is prohibited");
         require(isStakeHolder(stakeHolder), "Staking: There is not any stake holder with provided address");
         uint256 userStakesCount = _stakesCount[stakeHolder];
         uint256 reward;
         uint256 withdrawAmount;
         uint256 totalDeposited;
-        uint256 totalStakesAmount = _userTotalStakes[stakeHolder];
-        uint256 lpTotalStakesAmount = _userLpTotalStakes[stakeHolder];
 
         if(!_distributionEnded)
         {
@@ -403,38 +327,19 @@ contract Staking is Ownable{
             totalDeposited += deposited;
         }
 
-        _totalStakes -= isLP ? lpTotalStakesAmount : totalStakesAmount;
+        _totalStakes -= totalDeposited;
         _previousTotalStakes = _totalStakes;
 
         if(reward > 0) {
             _totalRewards += reward;
-            withdrawAmount = isLP ? reward : reward + totalDeposited;
+            withdrawAmount = reward + totalDeposited;
         } else {
-            withdrawAmount = isLP ? 0 : totalDeposited;
+            withdrawAmount = totalDeposited;
         }
 
         if(withdrawAmount != 0) { _token.safeTransfer(stakeHolder, withdrawAmount); }
 
-        removeStakeHolder(stakeHolder, isLP);
-        
-        if((_userTotalStakes[stakeHolder] != 0 || _userLpTotalStakes[stakeHolder] != 0) && !_isContractExpired())
-        {
-            if(isLP) {
-                if(totalStakesAmount != 0) {
-                    _stake[stakeHolder][0] = totalStakesAmount;
-                    _userTotalStakes[stakeHolder] = totalStakesAmount;
-                }
-            } else {
-                if(lpTotalStakesAmount != 0) {
-                    _stake[stakeHolder][0] = lpTotalStakesAmount;
-                    _userLpTotalStakes[stakeHolder] = lpTotalStakesAmount;
-                }
-            }
-
-            _distributedRewardsSnapshot[stakeHolder][0] = _distributedRewards;
-            _stakesCount[stakeHolder] = 1;
-            _stakeHoldersCount += 1;
-        }
+        removeStakeHolder(stakeHolder);
 
         emit UnStaked(stakeHolder, withdrawAmount);
 
