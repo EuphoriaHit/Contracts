@@ -332,7 +332,7 @@ contract Staking is Ownable{
 
         if(reward > 0) {
             _totalRewards += reward;
-            withdrawAmount = reward + totalDeposited;
+            withdrawAmount = (_isContractExpired() && _stakeHoldersCount == 1) ? _token.balanceOf(address(this)) : reward + totalDeposited;
         } else {
             withdrawAmount = totalDeposited;
         }
