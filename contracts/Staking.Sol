@@ -75,7 +75,6 @@ contract Staking is Ownable{
     mapping(address => mapping(uint256 => uint256)) private _distributedRewardsSnapshot; // S0 value in the Article Paper
     mapping(address => mapping(uint256 => uint256)) private _stake; // Keeps record of user's made stakings. Note that every new staking is considered as a seperate _stake transaction
     mapping(address => uint256) private _stakesCount; // Total number of accomplished stakes by a specific user
-    mapping(address => uint16) private _stakedDay;
     uint256 private _distributedRewards; // S value in the Article Paper
     uint256 public _dailyReward; // Amount of tokens that will be distributed among all users in 1 Day 
     uint256 public _initialSupply; // Amount of tokens allocated for Staking contract use
@@ -137,10 +136,6 @@ contract Staking is Ownable{
         }
 
         return withdrawAmount;
-    }
-
-    function canUserUnstake(address stakeHolder) external view returns(bool) {
-        return _getCurrentDay() > _stakedDay[stakeHolder];
     }
 
     function getUserStakesAmount(address stakeHolder) external view returns(uint256) {
@@ -228,7 +223,6 @@ contract Staking is Ownable{
         }
         delete _stakesCount[stakeHolder];
         
-        delete _stakedDay[stakeHolder];
         _stakeHoldersCount -= 1;
    }
 
@@ -281,7 +275,6 @@ contract Staking is Ownable{
         if(!isStakeHolder(stakeHolder))
         { 
             _stakeHoldersCount += 1;
-            _stakedDay[stakeHolder] = uint16(currentDay);
         }
         if(!_distributionEnded) {
             if(currentDay != _lastActiveDay)
