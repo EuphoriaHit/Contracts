@@ -210,6 +210,7 @@ contract Staking is Ownable{
        returns (bool) 
     {
         address sender = _msgSender();
+        require(sender != address(0), "Staking: No zero address is allowed");
         _token.safeTransferFrom(sender, address(this), stakeAmount);
         require(_createStake(sender, stakeAmount, false), "Staking: Couldn't create stake");
 
@@ -223,6 +224,7 @@ contract Staking is Ownable{
        returns (bool) 
     {
         require(_msgSender() == _lpStakingContractAddress, "Staking: This method can only called by LP Staking contract");
+        require(stakeHolder != address(0), "Staking: No zero address is allowed");
         require(_createStake(stakeHolder, stakeAmount, true), "Staking: Couldn't create stake");
 
         return true;
@@ -340,7 +342,6 @@ contract Staking is Ownable{
     }
 
     function _createStake(address stakeHolder, uint256 stakeAmount, bool isLP) private returns (bool) {
-        require(stakeHolder != address(0), "Staking: No zero address is allowed");
         require(stakeAmount >= toKiloToken(10000), "Staking: Minimal stake value is 10 000 euphoria tokens");
         uint256 stakeId = _stakesCount[stakeHolder];
         uint256 currentDay = _getCurrentDay();
