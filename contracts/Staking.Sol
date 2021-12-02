@@ -190,7 +190,7 @@ contract Staking is Ownable{
         return _unStake(sender);
     }
 
-    function finalize() external payable onlyOwner contractStarted contractExpired {
+    function finalize() external onlyOwner contractStarted contractExpired {
         address owner = _msgSender();
         uint256 balanceEUPH = _token.balanceOf(address(this));
         if(balanceEUPH > 0)  _token.safeTransfer(owner, balanceEUPH);
