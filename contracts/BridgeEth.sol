@@ -17,11 +17,10 @@ interface IERC20P is IERC20 {
 
 contract BridgeEth is Ownable, Pausable {
     IERC20P private _token;
-    uint256 _mintedTokensAmount; // Represents the total amount of unlocked tokens
-    uint256 _maxTotalSupply; // Maximum allowed amount of tokens
+    uint256 public _mintedTokensAmount; // Represents the total amount of unlocked tokens
+    uint256 public _maxTotalSupply; // Maximum allowed amount of tokens
     mapping(uint256 => bool) public _convertProcess;
-    bool _contractStarted;
-
+    bool private _contractStarted;
     bytes32 private BURN;
     bytes32 private MINT;
     bytes32 private VALIDATOR;
@@ -65,7 +64,7 @@ contract BridgeEth is Ownable, Pausable {
             _mintedTokensAmount >= amount,
             "ETH bridge: cannot burn more than total amount of minted tokens"
         );
-        _burn(sender, amount);
+        require(_burn(sender, amount), "ETH bridge: Burn of tokens failed");
         _mintedTokensAmount -= amount;
 
         emit TokenBurned(sender, amount, block.timestamp, BURN, VALIDATOR);
@@ -85,14 +84,14 @@ contract BridgeEth is Ownable, Pausable {
         );
         require(
             VALIDATOR == keccak256(abi.encodePacked(validator)),
-            "ETH bridge: Unkown validator off-chain"
+            "ETH bridge: Unknown validator off-chain"
         );
         require(
             _maxTotalSupply >= _mintedTokensAmount + amount,
             "ETH bridge: Cannot mint more than maximum total supply amount"
         );
         _convertProcess[nonce] = true;
-        _mint(to, amount);
+        require(_mint(to, amount), "ETH bridge: Mint of tokens failed");
         _mintedTokensAmount += amount;
 
         emit TokenMinted(to, amount, block.timestamp, MINT, VALIDATOR);
@@ -108,12 +107,13 @@ contract BridgeEth is Ownable, Pausable {
 
     function changeValidator(string memory validator) external onlyOwner whenPaused {
         require(
-            VALIDATOR != bytes32(abi.encode(validator)),
+            VALIDATOR != keccak256(abi.encode(validator)),
             "ETH bridge: Same validator can not be changed"
         );
-        VALIDATOR = bytes32(abi.encode(validator));
+        VALIDATOR = keccak256(abi.encode(validator));
     }
 
+    //This function is used in case of desynchronization of local mintedTokensAmount variable and real-life case
     function changeMintedTokensAmount(uint256 amount) external onlyOwner whenPaused {
         require(_mintedTokensAmount != amount, "ETH bridge: Change of same amount is prohibited");
         _mintedTokensAmount = amount;
@@ -131,11 +131,13 @@ contract BridgeEth is Ownable, Pausable {
         require(_token.transfer(to, amount), "ETH Bridge: Token transfer failed");
     }
 
-    function _burn(address to, uint256 amount) private {
+    function _burn(address to, uint256 amount) private returns (bool) {
         _token.burnFrom(to, amount);
+        return true;
     }
 
-    function _mint(address to, uint256 amount) private {
+    function _mint(address to, uint256 amount) private returns (bool) {
         _token.mint(to, amount);
+        return true;
     }
 }

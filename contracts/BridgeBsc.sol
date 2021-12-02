@@ -10,15 +10,13 @@ interface IBEP20 is IERC20 {}
 
 contract BridgeBsc is Ownable, Pausable {
     IBEP20 private _token;
-    uint256 _unlockedTokensAmount; // Represents the total amount of unlocked tokens
-    uint256 _maxTotalSupply; // Maximum allowed amount of tokens
+    uint256 public _unlockedTokensAmount; // Represents the total amount of unlocked tokens
+    uint256 public _maxTotalSupply; // Maximum allowed amount of tokens
     mapping(uint256 => bool) public _convertProcess;
-
+    bool private _isPaused;
     bytes32 private LOCK;
     bytes32 private UNLOCK;
     bytes32 public VALIDATOR;
-
-    bool _isPaused;
 
     event TokenLocked(
         address from,
@@ -77,7 +75,7 @@ contract BridgeBsc is Ownable, Pausable {
         );
         require(
             VALIDATOR == keccak256(abi.encodePacked(validator)),
-            "BSC bridge: Unkown validator off-chain"
+            "BSC bridge: Unknown validator off-chain"
         );
         
         require(
@@ -107,6 +105,7 @@ contract BridgeBsc is Ownable, Pausable {
         VALIDATOR = keccak256(abi.encodePacked(validator));
     }
 
+    //This function is used in case of desynchronization of local unlockedTokensAmount variable and real-life case
     function changeUnlockedTokensAmount(uint256 amount) external onlyOwner whenPaused {
         require(_unlockedTokensAmount != amount, "BSC bridge: Change of same amount is prohibited");
         _unlockedTokensAmount = amount;

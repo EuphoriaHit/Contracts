@@ -96,9 +96,11 @@ contract Staking is Ownable{
     // <================================ EXTERNAL FUNCTIONS ================================>
 
     // <<<================================= GETTERS =================================>>>
-    //THIS IS A CALL FUNCTION THAT RETURNS THE EXPECTED REWARD VALUE THAT USER WILL RECEIVE 
-    function calculateReward() external contractStarted view returns (uint256) {
-        address _stakeHolder = _msgSender();
+    //THIS IS A CALL FUNCTION THAT RETURNS THE EXPECTED REWARD VALUE THE USER RECEIVES 
+    function calculateReward(address _stakeHolder) external contractStarted view returns (uint256) {
+        if(!isStakeHolder(_stakeHolder)) {
+            return 0;
+        }
         uint256 userStakesCount = _stakesCount[_stakeHolder];
         uint256 reward;
         uint256 distributedRewards = _distributedRewards;
@@ -106,8 +108,7 @@ contract Staking is Ownable{
         uint256 totalDeposited;
         uint256 currentDay = _getCurrentDay();
         uint256 passedDays;
-        require(isStakeHolder(_stakeHolder), "Staking: This user must be a stake holder");
-
+        
         // Same code as in distributeRewards() method. However, it does not alter contract's state
         if(!_distributionEnded)
         {
@@ -138,6 +139,7 @@ contract Staking is Ownable{
         return withdrawAmount;
     }
 
+    //RETURNS USER'S TOTAL AMOUNT OF STAKES
     function getUserStakesAmount(address stakeHolder) external view returns(uint256) {
         uint256 result;
 
@@ -185,11 +187,10 @@ contract Staking is Ownable{
         returns (bool)
     {
         address sender = _msgSender();
-        require(isStakeHolder(sender), "Staking: There is not any stake holder with provided address");
         return _unStake(sender);
     }
 
-    function finalize() external onlyOwner contractStarted contractExpired {
+    function finalize() external payable onlyOwner contractStarted contractExpired {
         address owner = _msgSender();
         uint256 balanceEUPH = _token.balanceOf(address(this));
         if(balanceEUPH > 0)  _token.safeTransfer(owner, balanceEUPH);
