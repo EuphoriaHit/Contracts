@@ -104,7 +104,7 @@ contract Staking is Ownable{
         uint256 userStakesCount = _stakesCount[_stakeHolder];
         uint256 reward;
         uint256 distributedRewards = _distributedRewards;
-        uint256 withdrawAmount;
+        uint256 withdrawAmount = 0;
         uint256 totalDeposited;
         uint256 currentDay = _getCurrentDay();
         uint256 passedDays;
@@ -131,9 +131,7 @@ contract Staking is Ownable{
         }
 
         if(reward > 0) {
-            withdrawAmount = reward + totalDeposited;
-        } else {
-            withdrawAmount = totalDeposited;
+            withdrawAmount = reward;
         }
 
         return withdrawAmount;
