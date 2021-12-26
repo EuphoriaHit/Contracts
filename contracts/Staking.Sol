@@ -12,24 +12,25 @@ contract Staking is Ownable{
     using SafeERC20 for IERC20;
     uint64 constant PRECISION = 1e12;
     uint16 constant FIVE_MINUTES_IN_DAY = 288;
+    uint256 public constant MAX_WITHDRAW_FEE = 200; // 2%
+    uint256 public constant MAX_WITHDRAW_FEE_PERIOD = 5 days; // 5 days
 
     struct StakeHolder {
         uint256 stakes;
         uint256 shares; // number of stakes for a user
-        //uint256 lastDepositedTime; // keeps track of deposited time for potential penalty
-        //uint256 EuphAtLastUserAction; // keeps track of Euph deposited at the last user action
-        //uint256 lastUserActionTime; // keeps track of the last user action time
+        uint256 lastDepositedTime; // keeps track of deposited time for potential penalty
     }
 
     struct PrivateStakeHolder {
         address privateAddress;
         uint256 initialStakes; // number of initial locked tokens staked
         uint256 lockedStakes;
-        uint256 unlockPercentagePerMonth; //
-        uint256 lastWithdrawPercent; // the 
+        uint256 unlockPercentagePerMonth; // The percentage of tokens to be unlocked every month. Individual for each user depending on their initial stake amount
+        uint256 lastWithdrawPercent; // The unlock percentage of the last withdraw
     }
 
     modifier contractExpired() {
+        require(block.timestamp >= lastRewardTime, "Staking: Provided block.timestamp value has been modified");
         if(totalStakes == 0) {
             timeInPause += _pauseSinceTime(lastRewardTime);
             lastRewardTime = block.timestamp - (block.timestamp % 5 minutes);
@@ -39,11 +40,12 @@ contract Staking is Ownable{
     }
 
     modifier contractNotExpired() {
+        require(block.timestamp >= lastRewardTime, "Staking: Provided block.timestamp value has been modified");
         if(totalStakes == 0) {
             timeInPause += _pauseSinceTime(lastRewardTime);
             lastRewardTime = block.timestamp - (block.timestamp % 5 minutes);
         }
-        require(block.timestamp - timeInPause < (contractDurationInDays * 1 days + startDate), "Staking: The staking contract has already expired");
+        require(_isContractNotExpired(), "Staking: The staking contract has already expired");
         _;
     }
 
@@ -65,19 +67,26 @@ contract Staking is Ownable{
 
     // <================================ CONSTRUCTOR AND INITIALIZER ================================>
 
-    constructor(uint256 rewardSupply, uint16 durationInDays, address tokenAddress) {
+    constructor(uint256 rewardSupply, uint16 durationInDays, address tokenAddress, address treasuryAddress) {
         _setToken(tokenAddress);
         _setSupplyAndDuration(rewardSupply, durationInDays);
+        _setWithdrawOptions(10, 3);
         privateUnlockPercent = 175e9; // 10%. Max is 1e12;
         initialPrivateUnlockPercent = 175e9;
+        lockInitialDate = 1640390400;
+        treasury = treasuryAddress;
     }
 
-    function changeSupplyAndDuration(uint256 supplyPercentage, uint16 durationInDays) external onlyOwner contractNotStarted {
-        _setSupplyAndDuration(supplyPercentage, durationInDays);
+    function changeSupplyAndDuration(uint256 supply, uint16 durationInDays) external onlyOwner contractNotStarted {
+        _setSupplyAndDuration(supply, durationInDays);
     }
 
     function changeToken(address newTokenAddress) external onlyOwner contractNotStarted{
         _setToken(newTokenAddress);
+    }
+
+    function changeWithdrawOptions(uint256 newFee, uint256 newPeriod) external onlyOwner contractNotStarted{
+        _setWithdrawOptions(newFee, newPeriod);
     }
 
     function initialize()
@@ -92,33 +101,45 @@ contract Staking is Ownable{
     }
 
     // <================================ END OF CONSTRUCTOR AND INITIALIZER ================================>
-    IERC20 private token; // 
+    IERC20 private token;
+    
+    address public treasury; // Address where withdraw fee will be sent to
+
     bool private stakingStarted; // The boolean to check if the staking contract has been initialized and started the work process
     bool private distributionEnded; // This boolean is used to control the work of distribuiteRewards() function
+    
     uint256 public contractDurationInDays; // Duration of contract in days
     uint256 public rewardsPerFiveMins; // Amount of tokens that will be distributed among all users in 1 Day 
     uint256 public initialRewardSupply; // Initial amount of tokens allocated for Staking contract use
     uint256 public startDate; // Timestamp of the start day of the contract
-    uint256 public totalStakes;
+    uint256 public lockInitialDate; // Timestamp of the start day of the contract
+    uint256 public totalStakes; // Total number of stakes made be stake holders
     uint256 public totalShares; // Represents the total amount of staked Tokens
     uint256 public stakeHoldersCount; // Total number of stake holders (users)
-    uint256 public privateStakeHoldersCount;
+    uint256 public privateStakeHoldersCount; // Total number of private stake holders
     uint256 public timeInPause; // Number of days with no active stakes. If there were no stakes on a specific day, then no reward is distributed and the duration of contract is extended to plus one day
+    
     uint256 private rewardDebt; // userInfo[0].rewardDebt in Biswap's MasterStaking contract
     uint256 private providedTokens; // userInfo[0].amount in Biswap's MasterStaking contract
     uint256 private tempBalance; // Token balance of AutoBSW contract in Biswap implementation. tempBalance stands for temporary balance
-    uint256 public totalSupply; // Token Balance of pool with pid 0 in Biswap's MasterStaking contract
-    uint256 public depositedTokens; // depositedBsw in Biswap's MasterStaking contract
+    uint256 private totalSupply; // Token Balance of pool with pid 0 in Biswap's MasterStaking contract
+    uint256 private depositedTokens; // depositedBsw in Biswap's MasterStaking contract
+   
     uint256 private privateUnlockPercent; // this value is only used to track percentage, which allows user to unlock x% of their locked tokens. Initial value is 10%. It increments to 7.5% every month. Max is 100%
     uint256 private initialPrivateUnlockPercent; // Initial value of privateUnlockPercent that remains unchanged. Used for calculations
+    
+    uint256 public withdrawFee = 10; // 0.1% THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
+    uint256 public withdrawFeePeriod = 3 days; // 3 days THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
 
-    mapping(address => PrivateStakeHolder) privateStakeHoldersInfo;
-    mapping(address => StakeHolder) stakeHoldersInfo;
-    uint256 lastRewardTime = 0; //Timestamp of last updatePool;
-    uint256 accEuphPerShare = 0; // accBswPerShare variable in Biswap's MasterStaking contract
+    mapping(address => PrivateStakeHolder) public privateStakeHoldersInfo;
+    mapping(address => StakeHolder) public stakeHoldersInfo;
+    uint256 public lastRewardTime; //Timestamp of last updatePool;
+    uint256 public accEuphPerShare; // accBswPerShare variable in Biswap's MasterStaking contract
 
     // <================================ EVENTS ================================>
     event StakeCreated(address indexed stakeHolder, uint256 indexed stake);
+
+    event RewardsWithdrawn(address indexed stakeHolder, uint256 indexed withdrawAmount);
 
     event UnStaked(address indexed stakeHolder, uint256 indexed withdrawAmount);
 
@@ -210,43 +231,50 @@ contract Staking is Ownable{
     }
 
     function getStakeHolderShare(address _stakeHolder) public view returns(uint256) {
-        /*
-        uint256 _rewardAmount = calculateReward(_stakeHolder);
-        uint256 _totalSupply = totalSupply;
-        uint256 _accEuphPerShare = accEuphPerShare;
-        uint256 _depositedTokens = depositedTokens;
-
-        (_totalSupply, _accEuphPerShare) = updatePoolForCalculation(_totalSupply, _accEuphPerShare, _depositedTokens);
-
-        return (_rewardAmount * PRECISION) / _totalSupply;
-        */
         return (stakeHoldersInfo[_stakeHolder].shares * PRECISION) / totalShares;
     }
 
-    //RETURNS USER'S TOTAL AMOUNT OF STAKES
-    
+    // RETURNS USER'S TOTAL AMOUNT OF STAKES
     function getUserStakesAmount(address _stakeHolder) external view returns(uint256) {
         return stakeHoldersInfo[_stakeHolder].stakes;
+    }
+
+    // RETURNS TOTAL NUMBER OF STAKE HOLDERS
+    function getStakeHoldersAmount() external view returns(uint256) {
+        return stakeHoldersCount;
+    }
+
+    // RETURNS TOTAL NUMBER OF PRIVATE STAKE HOLDERS
+    function getPrivateStakeHoldersAmount() external view returns(uint256) {
+        return privateStakeHoldersCount;
     }
 
     function getUserLockedStakesAmount(address _stakeHolder) external view returns(uint256) {
         return privateStakeHoldersInfo[_stakeHolder].lockedStakes;
     }
 
-    function isStakeHolder(address stakeholder) public view returns(bool) {
-        if(stakeHoldersInfo[stakeholder].stakes != 0) {
+    function isStakeHolder(address _stakeHolder) public view returns(bool) {
+        if(stakeHoldersInfo[_stakeHolder].stakes != 0) {
             return true;
         }
        
        return false;
     }
     
-    function getUnlockedStakes(address _stakeHolder) external view returns(uint256) {
+    function isPrivateStakeHolder(address _stakeHolder) public view returns(bool) {
+        if(privateStakeHoldersInfo[_stakeHolder].privateAddress != address(0)) {
+            return true;
+        }
+       
+       return false;
+    }
+
+    function getUnlockedStakes(address _stakeHolder) public view returns(uint256) {
         uint256 unlockedStakesAmount = 0;
         if(privateStakeHoldersInfo[_stakeHolder].privateAddress != address(0)) {
             uint256 _privateUnlockPercent = privateUnlockPercent;
             PrivateStakeHolder memory privateSH = privateStakeHoldersInfo[_stakeHolder];
-            uint256 monthsSinceDate = _monthsSinceDate(startDate);
+            uint256 monthsSinceDate = _monthsSinceDate(lockInitialDate);
             if(_privateUnlockPercent == 1e12) { 
                 unlockedStakesAmount = privateSH.lockedStakes;
             } else {
@@ -260,6 +288,28 @@ contract Staking is Ownable{
         }
 
         return unlockedStakesAmount;
+    }
+
+    function requestStakeHolderInfo(address _stakeHolder) external view returns(
+        uint256 rewards, 
+        uint256 stakes, 
+        uint256 share,
+        uint256 depositedTime,
+        bool isUserPrivateStakeHolder,
+        uint256 unlockedStakes,
+        uint256 lockedStakes,
+        uint256 remainingUnlockMonths) 
+    {
+        StakeHolder memory stakeHolder = stakeHoldersInfo[_stakeHolder];
+        PrivateStakeHolder memory privateStakeHolder = privateStakeHoldersInfo[_stakeHolder];
+        rewards = calculateReward(_stakeHolder);
+        stakes = stakeHolder.stakes;
+        share = getStakeHolderShare(_stakeHolder);
+        depositedTime = stakeHolder.lastDepositedTime;
+        isUserPrivateStakeHolder = privateStakeHolder.privateAddress != address(0);
+        unlockedStakes = getUnlockedStakes(_stakeHolder);
+        lockedStakes = privateStakeHolder.lockedStakes;
+        remainingUnlockMonths = (1e12 - privateStakeHolder.lastWithdrawPercent) / 75e9;
     }
     
     // <<<================================= END OF GETTERS =================================>>>
@@ -279,7 +329,7 @@ contract Staking is Ownable{
        returns (bool) 
     {
         address stakeHolder = _msgSender();
-        require(_stakeAmount >= toKiloToken(10000), "Staking: Minimal stake value is 10 000 euphoria tokens");
+        require(_stakeAmount >= toKiloToken(10000) && _stakeAmount <= toKiloToken(10000000), "Staking: Stake value must be in a range between 10 000 (min) and 10 000 000 (max) euphoria tokens");
         require(_stake(stakeHolder, _stakeAmount), "Staking: Couldn't create stake");
         token.safeTransferFrom(msg.sender, address(this), _stakeAmount);
         emit StakeCreated(stakeHolder, _stakeAmount);
@@ -315,7 +365,7 @@ contract Staking is Ownable{
     {
         address stakeHolder = _msgSender();
         uint256 withdrawAmount;
-        if(privateStakeHoldersInfo[stakeHolder].privateAddress != address(0)) {
+        if(isPrivateStakeHolder(stakeHolder)) {
             uint256 _unlockedStakes = _getUnlockedStakes(stakeHolder);
             if(_unlockedStakes == 0) {
                 require(stakeHoldersInfo[stakeHolder].stakes != privateStakeHoldersInfo[stakeHolder].lockedStakes, "Staking: Your private sale EUPH tokens are still being locked. Please, wait till the next time");
@@ -336,10 +386,30 @@ contract Staking is Ownable{
         return true;
     }
 
+    function withdrawRewards()
+        external
+        contractStarted
+        notContract
+        returns (bool)
+    {
+        require(!_isContractExpired(), "Staking: Staking contract has already expired. Please use unstake instead to withdraw your tokens and rewards");
+        address stakeHolder = _msgSender();
+        uint256 withdrawAmount;
+        StakeHolder memory _stakeHolder = stakeHoldersInfo[stakeHolder];
+        uint256 stakeHolderStakes = _stakeHolder.stakes;
+        withdrawAmount = _unStake(stakeHolder, stakeHolderStakes);
+        withdrawAmount -= stakeHolderStakes;
+        _stake(stakeHolder, stakeHolderStakes);
+        token.safeTransfer(msg.sender, withdrawAmount);
+
+        emit RewardsWithdrawn(stakeHolder, withdrawAmount);
+        return true;
+    }
+
     function finalize() external onlyOwner contractStarted contractExpired {
         address owner = _msgSender();
-        uint256 balanceEUPH = token.balanceOf(address(this));
-        if(balanceEUPH > 0)  token.safeTransfer(owner, balanceEUPH);
+        uint256 balanceEUPH = balanceOfContract();
+        if(balanceEUPH > 0) token.safeTransfer(owner, balanceEUPH);
         selfdestruct(payable(owner));
     }
 
@@ -372,9 +442,7 @@ contract Staking is Ownable{
    function _removePrivateStakeHolder(address _stakeHolder) private contractStarted {
         delete privateStakeHoldersInfo[_stakeHolder];
         privateStakeHoldersCount -= 1;
-        if(stakeHoldersInfo[_stakeHolder].stakes == 0) {
-            delete stakeHoldersInfo[_stakeHolder];
-        }
+
         if(privateStakeHoldersCount == 0) {
             delete initialPrivateUnlockPercent;
             delete privateUnlockPercent;
@@ -383,8 +451,8 @@ contract Staking is Ownable{
     }
 
    function _setSupplyAndDuration(uint256 rewardSupply, uint16 durationInDays) private {
-       require(durationInDays > 0, "Staking: Duration cannot be a zero value");
-       require(rewardSupply > 0, "Staking: Reward supply must be higher than 0");
+        require(durationInDays > 0, "Staking: Duration cannot be a zero value");
+        require(rewardSupply > 0, "Staking: Reward supply must be higher than 0");
         contractDurationInDays = durationInDays;
         initialRewardSupply = rewardSupply;
         rewardsPerFiveMins = initialRewardSupply / (contractDurationInDays * FIVE_MINUTES_IN_DAY);
@@ -398,34 +466,16 @@ contract Staking is Ownable{
         token = IERC20(newTokenAddress);
     }
 
-    function _getCurrentDay() private view returns (uint256) 
-    {
-        return _daysSinceTime(startDate);  
-    }
-
-    function _getLastRewardDay() private view returns (uint256) {
-        return _daysSinceTime(lastRewardTime);
-    }
-
-    function _pauseSinceTime(uint256 _timestamp) private view returns (uint256) {
-        return _timestamp >= startDate ? ((block.timestamp - _timestamp) / 5 minutes) * 5 minutes : 0;
-    }
-
-    function _fiveMinutesSinceTime(uint256 _timestamp) private view returns (uint256) {
-        return _timestamp >= startDate ? (block.timestamp - _timestamp) / 5 minutes : 0;
-    }
-
-    function _daysSinceTime(uint256 _timestamp) private view returns (uint256) {
-        return _timestamp >= startDate ? (block.timestamp - _timestamp) / 1 days : 0;
-    }
-
-    function _monthsSinceDate(uint256 _timestamp) private view returns(uint256){
-        return  (block.timestamp - _timestamp) / 30 days;
+    function _setWithdrawOptions(uint256 newFee, uint256 newPeriod) private {
+        require(newFee > 0 && newFee <= MAX_WITHDRAW_FEE, "Staking: Withdraw fee must be in range between 1 (0.01%) and 200(2%)");
+        require(newPeriod > 0 && newFee <= MAX_WITHDRAW_FEE_PERIOD, "Staking: Withdraw Period must be in range between 1 and 5 days");       
+        withdrawFee = newFee;
+        withdrawFeePeriod = newPeriod * 1 days;
     }
 
     function _stake(address _stakeHolder, uint256 _stakeAmount) private returns (bool) {
         require(_stakeHolder != address(0), "Staking: No zero address is allowed");
-        require(_stakeAmount > 0, "Nothing to deposit");
+        require(_stakeAmount > 0, "Staking: Nothing to stake");
 
         if(!isStakeHolder(_stakeHolder))
         { 
@@ -447,13 +497,10 @@ contract Staking is Ownable{
 
         stakeHolder.shares += currentShares;
         stakeHolder.stakes += _stakeAmount;
-        //stakeholder.lastDepositedDay = _getCurrentDay();
+        stakeHolder.lastDepositedTime = block.timestamp;
 
         totalShares += currentShares;
         totalStakes += _stakeAmount;
-
-        //stakeHolder.EuphAtLastUserAction = (stakeHolder.shares * _balanceOf()) / totalShares;
-        //stakeholder.lastUserActionDay = _getCurrentDay();
 
         _earn();
 
@@ -465,7 +512,7 @@ contract Staking is Ownable{
         require(isStakeHolder(_stakeHolder), "Staking: There is not any stake holder with provided address");
         StakeHolder storage stakeHolder = stakeHoldersInfo[_stakeHolder];
         uint256 _shares = stakeHolder.shares;
-        require(_shares > 0, "Nothing to withdraw");
+        require(_shares > 0, "Staking: Nothing to withdraw");
 
         _harvest();
 
@@ -484,22 +531,15 @@ contract Staking is Ownable{
             }
         }
 
-        /*
-        if (stakeHolder.shares > 0) {
-            stakeHolder.EuphAtLastUserAction = (stakeHolder.shares * _balanceOf()) / totalShares;
-            stakeHolder.lastUserActionDay = _getCurrentDay();
-        } else {
-            _removeStakeHolder(_stakeHolder);
-        }
-        */
-        
         tempBalance -= currentAmount;
         
-        /*
-        if(privateStakeHoldersInfo[_stakeHolder].lockedStakes != 0) {
-            currentAmount -= privateStakeHoldersInfo[_stakeHolder].lockedStakes;
+        if (block.timestamp < stakeHolder.lastDepositedTime + withdrawFeePeriod) {
+            uint256 currentWithdrawFee = (currentAmount * withdrawFee) / 10000;
+            if(currentWithdrawFee > 0) {
+                token.safeTransfer(treasury, currentWithdrawFee);
+                currentAmount -= currentWithdrawFee;
+            }
         }
-        */
         
         if(stakeHolder.stakes > _unStakeAmount || privateStakeHoldersInfo[_stakeHolder].lockedStakes != 0) {
             currentAmount = (currentAmount - stakeHolder.stakes) + _unStakeAmount;    
@@ -509,17 +549,46 @@ contract Staking is Ownable{
         stakeHolder.stakes = 0;
         _removeStakeHolder(_stakeHolder);
 
+        if(totalStakes == 0) {
+            delete totalShares;
+            delete accEuphPerShare;
+            delete totalSupply;
+            delete stakeHoldersCount;
+            delete rewardDebt;
+            delete providedTokens;
+            delete tempBalance;
+            delete depositedTokens;
+        }
+
         return currentAmount;
+    }
+
+    function _pauseSinceTime(uint256 _timestamp) private view returns (uint256) {
+        return _timestamp >= startDate ? ((block.timestamp - _timestamp) / 5 minutes) * 5 minutes : 0;
+    }
+
+    function _fiveMinutesSinceTime(uint256 _timestamp) private view returns (uint256) {
+        return _timestamp >= startDate ? (block.timestamp - _timestamp) / 5 minutes : 0;
+    }
+
+    function _monthsSinceDate(uint256 _timestamp) private view returns(uint256){
+        return  (block.timestamp - _timestamp) / 30 days;
     }
 
     function _isContractExpired() private view returns(bool) {
         return block.timestamp - timeInPause >= contractDurationInDays * 1 days + startDate;
     }
 
+    function _isContractNotExpired() private view returns(bool) {
+        return block.timestamp - timeInPause < contractDurationInDays * 1 days + startDate;
+    }
+
+    // returns providedTokens + tempBalance. In Biswap's implementation it returns the user[0].amount
     function _balanceOf() private view returns (uint256) {
         return providedTokens + tempBalance;
     }
 
+    // returns tempBalance variable. In Biswap's implementation it returns the AutoBsw contract's token balance
     function _available() private view returns (uint256) {
         return tempBalance;
     }
@@ -544,7 +613,7 @@ contract Staking is Ownable{
     }
 
     function _leaveStaking(uint256 _amount) private {
-        require(providedTokens >= _amount, "withdraw: not good");
+        require(providedTokens >= _amount, "Staking: Error while leaving stake");
         updatePool();
         uint256 pending = ((providedTokens * accEuphPerShare) / PRECISION) - rewardDebt;
         if(pending > 0) {
@@ -587,10 +656,12 @@ contract Staking is Ownable{
         lastRewardTime = block.timestamp - (block.timestamp % 5 minutes);
     }
 
+    // The same as normal updatePool but does not alter the state of contract. Used in calculateReward() call method
     function updatePoolForCalculation(uint256 _totalSupply, uint256 _accEuphPerShare, uint256 _depositedTokens) private view returns(uint256, uint256) {
         uint256 _totalSupplyToReturn = _totalSupply;
         uint256 _accEuphPerShareToReturn = _accEuphPerShare;
 
+        if(distributionEnded) return (_totalSupply, _accEuphPerShare);
         if (block.timestamp <= lastRewardTime || lastRewardTime == (contractDurationInDays * 1 days + startDate) + timeInPause) {
             return (_totalSupply, _accEuphPerShare);
         }
@@ -615,11 +686,12 @@ contract Staking is Ownable{
         return (_totalSupplyToReturn, _accEuphPerShareToReturn);
     }
 
+    // This method does the same as getUnlockedStakes but alters the contract's state.
     function _getUnlockedStakes(address _stakeHolder) private returns(uint256) {
         uint256 unlockedStakesAmount = 0;
-        if(privateStakeHoldersInfo[_stakeHolder].privateAddress != address(0)) {
+        if(isPrivateStakeHolder(_stakeHolder)) {
             PrivateStakeHolder storage privateSH = privateStakeHoldersInfo[_stakeHolder];
-            uint256 monthsSinceDate = _monthsSinceDate(startDate);
+            uint256 monthsSinceDate = _monthsSinceDate(lockInitialDate);
             if(privateUnlockPercent == 1e12) { 
                 unlockedStakesAmount = privateSH.lockedStakes;
             } else {
@@ -636,7 +708,7 @@ contract Staking is Ownable{
     }
 
     function _harvest() private {
-        if((block.timestamp - lastRewardTime) / 5 minutes <= 0) return;
+        if((block.timestamp - lastRewardTime) / 5 minutes <= 0) return; // Return if no 5 minutes passed since last reward time
         _leaveStaking(0);
         _earn();
     }
