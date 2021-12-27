@@ -71,10 +71,10 @@ contract Staking is Ownable{
         _setToken(tokenAddress);
         _setSupplyAndDuration(rewardSupply, durationInDays);
         _setWithdrawOptions(10, 3);
+        _setTreasury(treasuryAddress);
         privateUnlockPercent = 175e9; // 10%. Max is 1e12;
         initialPrivateUnlockPercent = 175e9;
         initialLockTime = 1640390400;
-        treasury = treasuryAddress;
     }
 
     function changeSupplyAndDuration(uint256 supply, uint16 durationInDays) external onlyOwner contractNotStarted {
@@ -83,6 +83,10 @@ contract Staking is Ownable{
 
     function changeToken(address newTokenAddress) external onlyOwner contractNotStarted{
         _setToken(newTokenAddress);
+    }
+
+    function changeTreasury(address newTreasuryAddress) external onlyOwner {
+        _setTreasury(newTreasuryAddress);
     }
 
     function changeWithdrawOptions(uint256 newFee, uint256 newPeriod) external onlyOwner contractNotStarted{
@@ -337,7 +341,9 @@ contract Staking is Ownable{
        onlyOwner
        returns (bool) 
     {
+        require(!isPrivateStakeHolder(_publicAddress), "Staking: This user already is a private stake holder");
         uint256 months = _monthsSinceDate(initialLockTime);
+        require(months < 11, "Staking: Can not add additional private stake holder. Unlock percent is already 100%");
         uint256 _unlockedPercent = months >= 11 ? 1e12 : initialPrivateUnlockPercent + (months * 75e9);
         PrivateStakeHolder storage stakeHolder = privateStakeHoldersInfo[_publicAddress];
         stakeHolder.initialStakes += _stakeAmount;
@@ -445,7 +451,7 @@ contract Staking is Ownable{
         }
     }
 
-   function _setSupplyAndDuration(uint256 rewardSupply, uint16 durationInDays) private {
+    function _setSupplyAndDuration(uint256 rewardSupply, uint16 durationInDays) private {
         require(durationInDays > 0, "Staking: Duration cannot be a zero value");
         require(rewardSupply > 0, "Staking: Reward supply must be higher than 0");
         contractDurationInDays = durationInDays;
@@ -453,12 +459,20 @@ contract Staking is Ownable{
         rewardsPerFiveMins = initialRewardSupply / (contractDurationInDays * FIVE_MINUTES_IN_DAY);
    }
 
-   function _setToken(address newTokenAddress) private {
+    function _setToken(address newTokenAddress) private {
         require(
             address(token) != newTokenAddress,
             "Staking: Cannot change token of same address"
         );
         token = IERC20(newTokenAddress);
+    }
+
+    function _setTreasury(address newTreasuryAddress) private {
+        require(
+            address(treasury) != newTreasuryAddress,
+            "Staking: Cannot change treasuiry of same address"
+        );
+        treasury = address(newTreasuryAddress);
     }
 
     function _setWithdrawOptions(uint256 newFee, uint256 newPeriod) private {
