@@ -30,21 +30,11 @@ contract Staking is Ownable{
     }
 
     modifier contractExpired() {
-        require(block.timestamp >= lastRewardTime, "Staking: Provided block.timestamp value has been modified");
-        if(totalStakes == 0) {
-            timeInPause += _pauseSinceTime(lastRewardTime);
-            lastRewardTime = block.timestamp - (block.timestamp % 5 minutes);
-        }
         require(_isContractExpired(), "Staking: The staking contract is not yet expired");
         _;
     }
 
     modifier contractNotExpired() {
-        require(block.timestamp >= lastRewardTime, "Staking: Provided block.timestamp value has been modified");
-        if(totalStakes == 0) {
-            timeInPause += _pauseSinceTime(lastRewardTime);
-            lastRewardTime = block.timestamp - (block.timestamp % 5 minutes);
-        }
         require(_isContractNotExpired(), "Staking: The staking contract has already expired");
         _;
     }
@@ -232,7 +222,11 @@ contract Staking is Ownable{
             }
         }
 
-        return currentAmount - _stakes;
+        return currentAmount > _stakes ? currentAmount - _stakes : 0;
+    }
+
+    function getTotalStakes() external view returns(uint256) {
+        return totalStakes;
     }
 
     function getStakeHolderShare(address _stakeHolder) public view returns(uint256) {
@@ -306,7 +300,7 @@ contract Staking is Ownable{
         isUserPrivateStakeHolder = privateStakeHolder.privateAddress != address(0);
         unlockedStakes = getUnlockedStakes(_stakeHolder);
         lockedStakes = privateStakeHolder.lockedStakes;
-        remainingUnlockMonths = (1e12 - privateStakeHolder.lastWithdrawPercent) / 75e9;
+        remainingUnlockMonths = isUserPrivateStakeHolder ? (1e12 - privateStakeHolder.lastWithdrawPercent) / 75e9 : 0;
     }
     
     // <<<================================= END OF GETTERS =================================>>>
@@ -326,7 +320,7 @@ contract Staking is Ownable{
        returns (bool) 
     {
         address stakeHolder = _msgSender();
-        require(_stakeAmount >= toKiloToken(10000) && _stakeAmount <= toKiloToken(10000000), "Staking: Stake value must be in a range between 10 000 (min) and 10 000 000 (max) euphoria tokens");
+        require(_stakeAmount >= toKiloToken(10000), "Staking: Minimum stake value is 10 000 Euphoria tokens");
         require(_stake(stakeHolder, _stakeAmount), "Staking: Couldn't create stake");
         token.safeTransferFrom(stakeHolder, address(this), _stakeAmount);
         emit StakeCreated(stakeHolder, _stakeAmount);
@@ -372,14 +366,14 @@ contract Staking is Ownable{
                 require(stakeHoldersInfo[stakeHolder].stakes != privateStakeHoldersInfo[stakeHolder].lockedStakes, "Staking: Your private sale EUPH tokens are still being locked. Please, wait till the next time");
             }
             privateStakeHoldersInfo[stakeHolder].lockedStakes -= _unlockedStakes;
-            withdrawAmount = _unStake(stakeHolder, stakeHoldersInfo[stakeHolder].stakes - privateStakeHoldersInfo[stakeHolder].lockedStakes);
+            withdrawAmount = _unStake(stakeHolder, stakeHoldersInfo[stakeHolder].stakes - privateStakeHoldersInfo[stakeHolder].lockedStakes, false);
             if(privateStakeHoldersInfo[stakeHolder].lockedStakes == 0) {
                 _removePrivateStakeHolder(stakeHolder);
             } else {
                 _stake(stakeHolder, privateStakeHoldersInfo[stakeHolder].lockedStakes);
             }
         } else {
-            withdrawAmount = _unStake(stakeHolder, stakeHoldersInfo[stakeHolder].stakes);
+            withdrawAmount = _unStake(stakeHolder, stakeHoldersInfo[stakeHolder].stakes, false);
         }
         
         token.safeTransfer(stakeHolder, withdrawAmount);
@@ -398,8 +392,8 @@ contract Staking is Ownable{
         uint256 withdrawAmount;
         StakeHolder memory _stakeHolder = stakeHoldersInfo[stakeHolder];
         uint256 stakeHolderStakes = _stakeHolder.stakes;
-        withdrawAmount = _unStake(stakeHolder, stakeHolderStakes);
-        withdrawAmount -= stakeHolderStakes;
+        withdrawAmount = _unStake(stakeHolder, stakeHolderStakes, true);
+        require(withdrawAmount != 0, "Staking: There are no rewards available to be withdrawn");
         _stake(stakeHolder, stakeHolderStakes);
         token.safeTransfer(stakeHolder, withdrawAmount);
 
@@ -516,7 +510,7 @@ contract Staking is Ownable{
         return true;
    }
 
-   function _unStake(address _stakeHolder, uint256 _unStakeAmount) private returns (uint256) {
+   function _unStake(address _stakeHolder, uint256 _unStakeAmount, bool _onlyRewards) private returns (uint256) {
         require(_stakeHolder != address(0), "Staking: Zero address is prohibited");
         require(isStakeHolder(_stakeHolder), "Staking: There is not any stake holder with provided address");
         StakeHolder storage stakeHolder = stakeHoldersInfo[_stakeHolder];
@@ -542,6 +536,8 @@ contract Staking is Ownable{
 
         tempBalance -= currentAmount;
         
+        if(_onlyRewards) currentAmount = currentAmount > stakeHolder.stakes ? currentAmount - stakeHolder.stakes : 0;
+
         if (block.timestamp < stakeHolder.lastDepositedTime + withdrawFeePeriod) {
             uint256 currentWithdrawFee = (currentAmount * withdrawFee) / 10000;
             if(currentWithdrawFee > 0) {
@@ -584,11 +580,21 @@ contract Staking is Ownable{
         return block.timestamp > _timestamp ? (block.timestamp - _timestamp) / 2629746 : 0; //2629746 is 30.436875 days
     }
 
-    function _isContractExpired() private view returns(bool) {
+    function _isContractExpired() private returns(bool) {
+        require(block.timestamp >= lastRewardTime, "Staking: Provided block.timestamp value has been modified");
+        if(totalStakes == 0) {
+            timeInPause += _pauseSinceTime(lastRewardTime);
+            lastRewardTime = block.timestamp - (block.timestamp % 5 minutes);
+        }
         return block.timestamp - timeInPause >= contractDurationInDays * 1 days + startTime;
     }
 
-    function _isContractNotExpired() private view returns(bool) {
+    function _isContractNotExpired() private returns(bool) {
+        require(block.timestamp >= lastRewardTime, "Staking: Provided block.timestamp value has been modified");
+        if(totalStakes == 0) {
+            timeInPause += _pauseSinceTime(lastRewardTime);
+            lastRewardTime = block.timestamp - (block.timestamp % 5 minutes);
+        }
         return block.timestamp - timeInPause < contractDurationInDays * 1 days + startTime;
     }
 
