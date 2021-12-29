@@ -86,7 +86,7 @@ contract Staking is Ownable{
     {
         require(stakingStarted == false, "Staking: The staking contract has been already initialized");
         stakingStarted = true;
-        startTime = block.timestamp - (block.timestamp % 1 days );
+        startTime = block.timestamp - (block.timestamp % 5 minutes );
         lastRewardTime = startTime;
         transferTokensToContract(initialRewardSupply);
     }
@@ -114,7 +114,6 @@ contract Staking is Ownable{
     uint256 private providedTokens; // userInfo[0].amount in Biswap's MasterStaking contract
     uint256 private tempBalance; // Token balance of AutoBSW contract in Biswap implementation. tempBalance stands for temporary balance
     uint256 private totalSupply; // Token Balance of pool with pid 0 in Biswap's MasterStaking contract
-    uint256 private depositedTokens; // depositedBsw in Biswap's MasterStaking contract
    
     uint256 public withdrawFee = 10; // 0.1% THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
     uint256 public withdrawFeePeriod = 3 days; // 3 days THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
@@ -138,7 +137,6 @@ contract Staking is Ownable{
     // <<<================================= GETTERS =================================>>>
     //THIS IS A CALL FUNCTION THAT RETURNS THE EXPECTED REWARD VALUE THE USER RECEIVES 
     function calculateReward(address _stakeHolder) public view returns(uint256) {
-        if(!isStakeHolder(_stakeHolder)) return 0;
         uint256 _stakes = stakeHoldersInfo[_stakeHolder].stakes;
         uint256 _shares = stakeHoldersInfo[_stakeHolder].shares;
         uint256 _totalSupply = totalSupply;
@@ -146,9 +144,8 @@ contract Staking is Ownable{
         uint256 _accEuphPerShare = accEuphPerShare;
         uint256 _providedTokens = providedTokens;
         uint256 _rewardDebt = rewardDebt;
-        uint256 _depositedTokens = depositedTokens;
 
-        (_totalSupply, _accEuphPerShare) = _updatePoolForCalculation(_totalSupply, _accEuphPerShare, _depositedTokens);
+        (_totalSupply, _accEuphPerShare) = _updatePoolForCalculation(_totalSupply, _accEuphPerShare, _providedTokens);
         //LEAVESTAKING(0)
         uint256 pending = ((_providedTokens * _accEuphPerShare) / PRECISION) - _rewardDebt;
         if(pending > 0) {
@@ -182,7 +179,6 @@ contract Staking is Ownable{
             _tempBalance -= _amount;
             _totalSupply += _amount;
             _providedTokens += _amount;
-            _depositedTokens += _amount;
         }
         _rewardDebt = (_providedTokens * _accEuphPerShare) / PRECISION;
 
@@ -217,6 +213,35 @@ contract Staking is Ownable{
         }
 
         return currentAmount > _stakes ? currentAmount - _stakes : 0;
+    }
+
+    function getTotalPool() public view returns(uint256) {
+        uint256 _totalSupply = totalSupply;
+        uint256 _tempBalance = tempBalance;
+        uint256 _accEuphPerShare = accEuphPerShare;
+        uint256 _providedTokens = providedTokens;
+        uint256 _rewardDebt = rewardDebt;
+
+        (_totalSupply, _accEuphPerShare) = _updatePoolForCalculation(_totalSupply, _accEuphPerShare, _providedTokens);
+        //LEAVESTAKING(0)
+        uint256 pending = ((_providedTokens * _accEuphPerShare) / PRECISION) - _rewardDebt;
+        if(pending > 0) {
+            uint256 val;
+            if (pending > _totalSupply) {
+                val = _totalSupply;
+            } else {
+                val = pending;
+            }
+            _tempBalance += val;
+        }
+
+        //ENTERSTAKING(available())
+        uint256 _amount = _tempBalance;
+        if(_amount > 0) {
+            _providedTokens += _amount;
+        }
+
+        return _providedTokens;
     }
 
     function getTotalStakes() external view returns(uint256) {
@@ -550,7 +575,6 @@ contract Staking is Ownable{
             delete rewardDebt;
             delete providedTokens;
             delete tempBalance;
-            delete depositedTokens;
         }
 
         return currentAmount;
@@ -610,7 +634,6 @@ contract Staking is Ownable{
             tempBalance -= _amount;
             totalSupply += _amount;
             providedTokens += _amount;
-            depositedTokens += _amount;
         }
         rewardDebt = (providedTokens * accEuphPerShare) / PRECISION;
     }
@@ -628,7 +651,6 @@ contract Staking is Ownable{
             providedTokens -= _amount;
             totalSupply -= _amount;
             tempBalance += _amount;
-            depositedTokens -= _amount;
         }
         rewardDebt = (providedTokens * accEuphPerShare) / PRECISION;
     }
@@ -637,7 +659,7 @@ contract Staking is Ownable{
         if(distributionEnded) return;
         if(block.timestamp <= lastRewardTime || lastRewardTime == (contractDurationInDays * 1 days + startTime) + timeInPause) return;
         
-        uint256 supply = depositedTokens;
+        uint256 supply = providedTokens;
 
         if (supply <= 0) {
             lastRewardTime = block.timestamp;
@@ -660,7 +682,7 @@ contract Staking is Ownable{
     }
 
     // The same as normal updatePool but does not alter the state of contract. Used in calculateReward() call method
-    function _updatePoolForCalculation(uint256 _totalSupply, uint256 _accEuphPerShare, uint256 _depositedTokens) private view returns(uint256, uint256) {
+    function _updatePoolForCalculation(uint256 _totalSupply, uint256 _accEuphPerShare, uint256 _providedTokens) private view returns(uint256, uint256) {
         uint256 _totalSupplyToReturn = _totalSupply;
         uint256 _accEuphPerShareToReturn = _accEuphPerShare;
 
@@ -669,7 +691,7 @@ contract Staking is Ownable{
             return (_totalSupply, _accEuphPerShare);
         }
         
-        uint256 supply = _depositedTokens;
+        uint256 supply = _providedTokens;
 
         if (supply <= 0) {
             return (_totalSupply, _accEuphPerShare);
