@@ -137,6 +137,7 @@ contract Staking is Ownable{
     // <<<================================= GETTERS =================================>>>
     //THIS IS A CALL FUNCTION THAT RETURNS THE EXPECTED REWARD VALUE THE USER RECEIVES 
     function calculateReward(address _stakeHolder) public view returns(uint256) {
+        if(!isStakeHolder(_stakeHolder)) return 0;
         uint256 _stakes = stakeHoldersInfo[_stakeHolder].stakes;
         uint256 _shares = stakeHoldersInfo[_stakeHolder].shares;
         uint256 _totalSupply = totalSupply;
@@ -249,7 +250,7 @@ contract Staking is Ownable{
     }
 
     function getStakeHolderShare(address _stakeHolder) public view returns(uint256) {
-        return (stakeHoldersInfo[_stakeHolder].shares * PRECISION) / totalShares;
+        return totalShares > 0 ? (stakeHoldersInfo[_stakeHolder].shares * PRECISION) / totalShares : 0;
     }
 
     // RETURNS USER'S TOTAL AMOUNT OF STAKES
