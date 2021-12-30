@@ -16,15 +16,15 @@ contract Staking is Ownable{
     uint256 public constant MAX_WITHDRAW_FEE_PERIOD = 5 days; // 5 days
 
     struct StakeHolder {
-        uint256 stakes;
-        uint256 shares; // number of stakes for a user
+        uint256 stakes; // total amount of stake holder stakes
+        uint256 shares; // stake holder shares
         uint256 lastDepositedTime; // keeps track of deposited time for potential penalty
     }
 
     struct PrivateStakeHolder {
-        uint256 lockedStakes;
-        uint256 unlockTokensPerMonth; // The percentage of tokens to be unlocked every month. Individual for each user depending on their initial stake amount
-        uint256 lastWithdrawMonth; // The unlock percentage of the last withdraw
+        uint256 lockedStakes; // Amount of tokens being in lock
+        uint256 unlockTokensPerMonth; // The amount of tokens to be unlocked every month. Individual for each user depending on their initial stake amount
+        uint256 lastWithdrawMonth; // The unlock month number of the last withdraw
     }
 
     modifier contractExpired() {
@@ -103,12 +103,12 @@ contract Staking is Ownable{
     uint256 public rewardsPerFiveMins; // Amount of tokens that will be distributed among all users in 1 Day 
     uint256 public initialRewardSupply; // Initial amount of tokens allocated for Staking contract use
     uint256 public startTime; // Timestamp of the start day of the contract
-    uint256 public initialLockTime; // Timestamp of the start day of the contract
-    uint256 public totalStakes; // Total number of stakes made be stake holders
+    uint256 public initialLockTime; // Timestamp of the start day of the private tokens unlock
+    uint256 public totalStakes; // Total number of stakes made by stake holders
     uint256 public totalShares; // Represents the total amount of staked Tokens
     uint256 public stakeHoldersCount; // Total number of stake holders (users)
     uint256 public privateStakeHoldersCount; // Total number of private stake holders
-    uint256 public timeInPause; // Number of days with no active stakes. If there were no stakes on a specific day, then no reward is distributed and the duration of contract is extended to plus one day
+    uint256 public timeInPause; // Timestamp amount with no active stakes. If there were no stakes on a specific period, then no reward is distributed and the duration of contract is extended to paused amount
     
     uint256 private rewardDebt; // userInfo[0].rewardDebt in Biswap's MasterStaking contract
     uint256 private providedTokens; // userInfo[0].amount in Biswap's MasterStaking contract
@@ -343,7 +343,7 @@ contract Staking is Ownable{
         return true;
     }
 
-    function stakeForPrivateSaleStakeholder(address _privateAddress, address _publicAddress, uint256 _stakeAmount)
+    function stakeForPrivateSaleStakeholder(address _privateAddress, address _publicAddress, uint256 _unlockedStakeAmount, uint256 _lockedStakeAmount)
        external
        contractStarted
        contractNotExpired
@@ -355,10 +355,11 @@ contract Staking is Ownable{
         require(months < 11, "Staking: Can not add additional private stake holder. Unlock percent is already 100% and lock period is expired");
         uint256 _unlockedPercent = months >= 11 ? 1e12 : 175e9 + (months * 75e9);
         PrivateStakeHolder storage stakeHolder = privateStakeHoldersInfo[_publicAddress];
-        stakeHolder.lockedStakes = _stakeAmount;
-        stakeHolder.unlockTokensPerMonth = _stakeAmount / ((1e12 - _unlockedPercent) / 75e9);
+        stakeHolder.lockedStakes = _lockedStakeAmount;
+        stakeHolder.unlockTokensPerMonth = _lockedStakeAmount / ((1e12 - _unlockedPercent) / 75e9);
         stakeHolder.lastWithdrawMonth = months;
         privateStakeHoldersCount += 1;
+        uint256 _stakeAmount = _unlockedStakeAmount + _lockedStakeAmount;
         require(_stake(_publicAddress, _stakeAmount), "Staking: Couldn't create stake");
         token.safeTransferFrom(_privateAddress, address(this), _stakeAmount);
 
@@ -552,16 +553,16 @@ contract Staking is Ownable{
         
         if(_onlyRewards) currentAmount = currentAmount > stakeHolder.stakes ? currentAmount - stakeHolder.stakes : 0;
 
+        if(stakeHolder.stakes > _unStakeAmount || privateStakeHoldersInfo[_stakeHolder].lockedStakes != 0) {
+            currentAmount = stakeHolder.stakes > currentAmount ? _unStakeAmount : (currentAmount - stakeHolder.stakes) + _unStakeAmount;    
+        }
+
         if (block.timestamp < stakeHolder.lastDepositedTime + withdrawFeePeriod) {
             uint256 currentWithdrawFee = (currentAmount * withdrawFee) / 10000;
             if(currentWithdrawFee > 0) {
                 token.safeTransfer(treasury, currentWithdrawFee);
                 currentAmount -= currentWithdrawFee;
             }
-        }
-        
-        if(stakeHolder.stakes > _unStakeAmount || privateStakeHoldersInfo[_stakeHolder].lockedStakes != 0) {
-            currentAmount = (currentAmount - stakeHolder.stakes) + _unStakeAmount;    
         }
 
         totalStakes -= stakeHolder.stakes;
