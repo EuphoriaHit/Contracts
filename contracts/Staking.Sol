@@ -217,6 +217,7 @@ contract Staking is Ownable{
     }
 
     function getTotalPool() public view returns(uint256) {
+        if(totalStakes == 0) return 0;
         uint256 _totalSupply = totalSupply;
         uint256 _tempBalance = tempBalance;
         uint256 _accEuphPerShare = accEuphPerShare;
@@ -372,26 +373,29 @@ contract Staking is Ownable{
         notContract
         returns (bool)
     {
-        address stakeHolder = _msgSender();
+        address _stakeHolder = _msgSender();
         uint256 withdrawAmount;
-        if(isPrivateStakeHolder(stakeHolder)) {
-            uint256 _unlockedStakes = _getUnlockedStakes(stakeHolder);
+        StakeHolder memory stakeHolder = stakeHoldersInfo[_stakeHolder];
+        PrivateStakeHolder storage privateSH = privateStakeHoldersInfo[_stakeHolder];
+        if(isPrivateStakeHolder(_stakeHolder)) {
+            uint256 _unlockedStakes = _getUnlockedStakes(_stakeHolder);
+
             if(_unlockedStakes == 0) {
-                require(stakeHoldersInfo[stakeHolder].stakes != privateStakeHoldersInfo[stakeHolder].lockedStakes, "Staking: Your private sale EUPH tokens are still being locked. Please, wait till the next time");
+                require(stakeHolder.stakes != privateSH.lockedStakes, "Staking: Your private sale EUPH tokens are still being locked. Please, wait till the next time");
             }
-            privateStakeHoldersInfo[stakeHolder].lockedStakes -= _unlockedStakes;
-            withdrawAmount = _unStake(stakeHolder, stakeHoldersInfo[stakeHolder].stakes - privateStakeHoldersInfo[stakeHolder].lockedStakes, false);
-            if(privateStakeHoldersInfo[stakeHolder].lockedStakes == 0) {
-                _removePrivateStakeHolder(stakeHolder);
+            privateSH.lockedStakes = privateSH.lockedStakes >=_unlockedStakes ? privateSH.lockedStakes - _unlockedStakes : 0;
+            withdrawAmount = _unStake(_stakeHolder, stakeHolder.stakes - privateSH.lockedStakes, false);
+            if(privateSH.lockedStakes == 0) {
+                _removePrivateStakeHolder(_stakeHolder);
             } else {
-                _stake(stakeHolder, privateStakeHoldersInfo[stakeHolder].lockedStakes);
+                _stake(_stakeHolder, privateSH.lockedStakes);
             }
         } else {
-            withdrawAmount = _unStake(stakeHolder, stakeHoldersInfo[stakeHolder].stakes, false);
+            withdrawAmount = _unStake(_stakeHolder, stakeHolder.stakes, false);
         }
         
-        token.safeTransfer(stakeHolder, withdrawAmount);
-        emit UnStaked(stakeHolder, withdrawAmount);
+        token.safeTransfer(_stakeHolder, withdrawAmount);
+        emit UnStaked(_stakeHolder, withdrawAmount);
         return true;
     }
 
