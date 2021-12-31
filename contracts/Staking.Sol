@@ -246,6 +246,11 @@ contract Staking is Ownable{
         return _providedTokens;
     }
 
+    function getAPR() external view returns(uint256) {
+        uint256 totalPool = getTotalPool();
+        return totalPool > 0 ? ((6160164192 * 100000) / totalPool) * 365 : 0;
+    }
+
     function getTotalStakes() external view returns(uint256) {
         return totalStakes;
     }
@@ -307,6 +312,7 @@ contract Staking is Ownable{
         bool isUserPrivateStakeHolder,
         uint256 unlockedStakes,
         uint256 lockedStakes,
+        uint256 lockedStakesDynamic,
         uint256 remainingUnlockMonths) 
     {
         StakeHolder memory stakeHolder = stakeHoldersInfo[_stakeHolder];
@@ -318,6 +324,7 @@ contract Staking is Ownable{
         isUserPrivateStakeHolder = isPrivateStakeHolder(_stakeHolder);
         unlockedStakes = getUnlockedStakes(_stakeHolder);
         lockedStakes = privateStakeHolder.lockedStakes;
+        lockedStakesDynamic = privateStakeHolder.lockedStakes >= unlockedStakes ? privateStakeHolder.lockedStakes - unlockedStakes : 0;
         remainingUnlockMonths = _monthsSinceDate(initialLockTime) - privateStakeHolder.lastWithdrawMonth;
     }
     
