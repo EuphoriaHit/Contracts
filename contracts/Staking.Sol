@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0 <0.9.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 //This smart contract's code was copied and adopted from Biswap's impementation
 //https://github.com/biswap-org/staking
 //This contract combines MasterChef and AutoBSW contracts logic into one contract
 
-contract Staking is Ownable{
-    using SafeERC20 for IERC20;
+contract Staking is Initializable, OwnableUpgradeable{
+    using SafeERC20Upgradeable for IERC20Upgradeable;
     uint64 constant PRECISION = 1e12;
     uint16 constant FIVE_MINUTES_IN_DAY = 288;
     uint256 public constant MAX_WITHDRAW_FEE = 200; // 2%
@@ -38,7 +39,7 @@ contract Staking is Ownable{
     }
 
     modifier contractStarted() {
-        require(stakingStarted == true, "Staking: The staking contract has not started yet");
+        require(stakingStarted == true, "Staking: The staking contract has finished or not yet begun");
         _;
     }
 
@@ -53,46 +54,7 @@ contract Staking is Ownable{
         _;
     }
 
-    // <================================ CONSTRUCTOR AND INITIALIZER ================================>
-
-    constructor(uint256 rewardSupply, uint16 durationInDays, address tokenAddress, address treasuryAddress) {
-        _setToken(tokenAddress);
-        _setSupplyAndDuration(rewardSupply, durationInDays);
-        _setWithdrawOptions(10, 3);
-        _setTreasury(treasuryAddress);
-        initialLockTime = 1640390400;
-    }
-
-    function changeSupplyAndDuration(uint256 supply, uint16 durationInDays) external onlyOwner contractNotStarted {
-        _setSupplyAndDuration(supply, durationInDays);
-    }
-
-    function changeToken(address newTokenAddress) external onlyOwner contractNotStarted{
-        _setToken(newTokenAddress);
-    }
-
-    function changeTreasury(address newTreasuryAddress) external onlyOwner {
-        _setTreasury(newTreasuryAddress);
-    }
-
-    function changeWithdrawOptions(uint256 newFee, uint256 newPeriod) external onlyOwner contractNotStarted{
-        _setWithdrawOptions(newFee, newPeriod);
-    }
-
-    function initialize()
-        external
-        onlyOwner
-        contractNotStarted
-    {
-        require(stakingStarted == false, "Staking: The staking contract has been already initialized");
-        stakingStarted = true;
-        startTime = block.timestamp - (block.timestamp % 5 minutes );
-        lastRewardTime = startTime;
-        transferTokensToContract(initialRewardSupply);
-    }
-
-    // <================================ END OF CONSTRUCTOR AND INITIALIZER ================================>
-    IERC20 private token;
+    IERC20Upgradeable private token;
     
     address public treasury; // Address where withdraw fee will be sent to
 
@@ -115,15 +77,69 @@ contract Staking is Ownable{
     uint256 private tempBalance; // Token balance of AutoBSW contract in Biswap implementation. tempBalance stands for temporary balance
     uint256 private totalSupply; // Token Balance of pool with pid 0 in Biswap's MasterStaking contract
    
-    uint256 public withdrawFee = 10; // 0.1% THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
-    uint256 public withdrawFeePeriod = 3 days; // 3 days THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
+    uint256 public withdrawFee; // 0.1% THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
+    uint256 public withdrawFeePeriod; // 3 days THIS VALUE MIGHT BE CHANGED, BUT IT IS NOT EXPECTED
 
     mapping(address => PrivateStakeHolder) public privateStakeHoldersInfo;
     mapping(address => StakeHolder) public stakeHoldersInfo;
     uint256 public lastRewardTime; //Timestamp of last updatePool;
     uint256 public accEuphPerShare; // accBswPerShare variable in Biswap's MasterStaking contract
 
+    // <================================ CONSTRUCTOR AND INITIALIZER ================================>
+    function changeSupplyAndDuration(uint256 supply, uint16 durationInDays) external onlyOwner contractNotStarted {
+        _setSupplyAndDuration(supply, durationInDays);
+    }
+
+    function changeToken(address newTokenAddress) external onlyOwner contractNotStarted{
+        _setToken(newTokenAddress);
+    }
+
+    function changeTreasury(address newTreasuryAddress) external onlyOwner {
+        _setTreasury(newTreasuryAddress);
+    }
+
+    function changeWithdrawOptions(uint256 newFee, uint256 newPeriod) external onlyOwner contractNotStarted{
+        _setWithdrawOptions(newFee, newPeriod);
+    }
+
+    function initialize(uint256 rewardSupply, uint16 durationInDays, address tokenAddress, address treasuryAddress)
+        external
+        initializer
+    {
+        __Ownable_init();
+        _setToken(tokenAddress);
+        _setSupplyAndDuration(rewardSupply, durationInDays);
+        _setWithdrawOptions(10, 3);
+        _setTreasury(treasuryAddress);
+        initialLockTime = 1640390400;
+
+        stakingStarted = true; 
+        distributionEnded = false;
+        
+        startTime = 1640943900;
+        totalStakes = 939880265567;
+        totalShares = 938841582453256209981771;
+        stakeHoldersCount = 167;
+        privateStakeHoldersCount = 67;
+        timeInPause = 900;
+
+        rewardDebt = 14148405778;
+        providedTokens = 952882731961;
+        tempBalance = 0;
+        totalSupply = 952882732018;
+    
+        withdrawFee = 10;
+        withdrawFeePeriod = 3 days;
+
+        lastRewardTime = 1641127800;
+        accEuphPerShare = 14848003121;
+    }
+
+    // <================================ END OF CONSTRUCTOR AND INITIALIZER ================================>
+
     // <================================ EVENTS ================================>
+    event PrivateStakeCreated(address indexed privateStakeHolder, address indexed stakeHolder, uint256 indexed stake);
+    
     event StakeCreated(address indexed stakeHolder, uint256 indexed stake);
 
     event RewardsWithdrawn(address indexed stakeHolder, uint256 indexed withdrawAmount);
@@ -347,6 +363,7 @@ contract Staking is Ownable{
         address stakeHolder = _msgSender();
         require(_stake(stakeHolder, _stakeAmount), "Staking: Couldn't create stake");
         token.safeTransferFrom(stakeHolder, address(this), _stakeAmount);
+        stakeHoldersInfo[stakeHolder].lastDepositedTime = block.timestamp;
         emit StakeCreated(stakeHolder, _stakeAmount);
         return true;
     }
@@ -359,18 +376,21 @@ contract Staking is Ownable{
        returns (bool) 
     {
         require(!isPrivateStakeHolder(_publicAddress), "Staking: This user already is a private stake holder");
-        uint256 months = _monthsSinceDate(initialLockTime);
-        require(months < 11, "Staking: Can not add additional private stake holder. Unlock percent is already 100% and lock period is expired");
-        uint256 _unlockedPercent = months >= 11 ? 1e12 : 175e9 + (months * 75e9);
-        PrivateStakeHolder storage stakeHolder = privateStakeHoldersInfo[_publicAddress];
-        stakeHolder.lockedStakes = _lockedStakeAmount;
-        stakeHolder.unlockTokensPerMonth = _lockedStakeAmount / ((1e12 - _unlockedPercent) / 75e9);
-        stakeHolder.lastWithdrawMonth = months;
-        privateStakeHoldersCount += 1;
+        if(_lockedStakeAmount > 0) {
+            uint256 months = _monthsSinceDate(initialLockTime);
+            uint256 _unlockedPercent = months >= 11 ? 1e12 : 175e9 + (months * 75e9);
+            PrivateStakeHolder storage stakeHolder = privateStakeHoldersInfo[_publicAddress];
+            stakeHolder.lockedStakes = _lockedStakeAmount;
+            stakeHolder.unlockTokensPerMonth = _lockedStakeAmount / ((1e12 - _unlockedPercent) / 75e9);
+            stakeHolder.lastWithdrawMonth = months;
+            privateStakeHoldersCount += 1;
+        }
         uint256 _stakeAmount = _unlockedStakeAmount + _lockedStakeAmount;
         require(_stake(_publicAddress, _stakeAmount), "Staking: Couldn't create stake");
+        stakeHoldersInfo[_publicAddress].lastDepositedTime = block.timestamp;
         token.safeTransferFrom(_privateAddress, address(this), _stakeAmount);
-
+        
+        emit PrivateStakeCreated(_privateAddress, _publicAddress, _stakeAmount);
         return true;
     }
 
@@ -430,14 +450,14 @@ contract Staking is Ownable{
     function withdrawToken(address _token, uint256 _amount) external onlyOwner notContract {
         require(_token != address(0), "Staking: Token of zero address is not allowed");
         address owner = _msgSender();
-        IERC20(_token).safeTransfer(owner, _amount);
+        IERC20Upgradeable(_token).safeTransfer(owner, _amount);
     } 
 
     function finalize() external onlyOwner notContract contractStarted contractExpired {
         address owner = _msgSender();
         uint256 balanceEUPH = balanceOfContract();
         if(balanceEUPH > 0) token.safeTransfer(owner, balanceEUPH);
-        selfdestruct(payable(owner));
+        stakingStarted = false;
     }
 
     // <================================ INTERNAL FUNCTIONS ================================>
@@ -484,7 +504,7 @@ contract Staking is Ownable{
             address(token) != newTokenAddress,
             "Staking: Cannot change token of same address"
         );
-        token = IERC20(newTokenAddress);
+        token = IERC20Upgradeable(newTokenAddress);
     }
 
     function _setTreasury(address newTreasuryAddress) private {
@@ -526,7 +546,6 @@ contract Staking is Ownable{
 
         stakeHolder.shares += currentShares;
         stakeHolder.stakes += _stakeAmount;
-        stakeHolder.lastDepositedTime = block.timestamp;
 
         totalShares += currentShares;
         totalStakes += _stakeAmount;
@@ -562,23 +581,30 @@ contract Staking is Ownable{
 
         tempBalance -= currentAmount;
         
-        if(_onlyRewards) currentAmount = currentAmount > stakeHolder.stakes ? currentAmount - stakeHolder.stakes : 0;
-
-        if(stakeHolder.stakes > _unStakeAmount || privateStakeHoldersInfo[_stakeHolder].lockedStakes != 0) {
-            currentAmount = stakeHolder.stakes > currentAmount ? _unStakeAmount : (currentAmount - stakeHolder.stakes) + _unStakeAmount;    
+        if(stakeHolder.stakes > _unStakeAmount) {
+            currentAmount = currentAmount >= stakeHolder.stakes ? (currentAmount - stakeHolder.stakes) + _unStakeAmount : _unStakeAmount;
         }
 
-        if (block.timestamp < stakeHolder.lastDepositedTime + withdrawFeePeriod) {
-            uint256 currentWithdrawFee = (currentAmount * withdrawFee) / 10000;
-            if(currentWithdrawFee > 0) {
-                token.safeTransfer(treasury, currentWithdrawFee);
-                currentAmount -= currentWithdrawFee;
+        if(_onlyRewards) currentAmount = currentAmount > stakeHolder.stakes ? currentAmount - stakeHolder.stakes : 0;
+
+        if(currentAmount > 0)
+        {
+            if (block.timestamp < stakeHolder.lastDepositedTime + withdrawFeePeriod) {
+                uint256 currentWithdrawFee = (currentAmount * withdrawFee) / 10000;
+                if(currentWithdrawFee > 0) {
+                    token.safeTransfer(treasury, currentWithdrawFee);
+                    currentAmount -= currentWithdrawFee;
+                }
             }
         }
 
         totalStakes -= stakeHolder.stakes;
-        stakeHolder.stakes = 0;
+        uint256 _stakes = stakeHolder.stakes;
+        uint256 _lastDepositedTime = stakeHolder.lastDepositedTime;
         _removeStakeHolder(_stakeHolder);
+        if(_onlyRewards || _stakes > _unStakeAmount) {
+            stakeHolder.lastDepositedTime = _lastDepositedTime;
+        }
 
         if(totalStakes == 0) {
             delete totalShares;
@@ -771,5 +797,39 @@ contract Staking is Ownable{
             size := extcodesize(addr)
         }
         return size > 0;
+    }
+
+    function migrateStakeHolder(
+        address[] calldata stakeHolders,
+        uint256[] calldata stakes,
+        uint256[] calldata shares,
+        uint256[] calldata lastDepositedTime
+    ) 
+        external 
+        onlyOwner 
+    {
+        for(uint256 i = 0; i < stakeHolders.length; i++) {
+            StakeHolder storage stakeHolder = stakeHoldersInfo[stakeHolders[i]];
+            stakeHolder.stakes = stakes[i];
+            stakeHolder.shares = shares[i];
+            stakeHolder.lastDepositedTime = lastDepositedTime[i];
+        }
+    }
+
+    function migratePrivateStakeHolder(
+        address[] calldata stakeHolders,
+        uint256[] calldata lockedStakes,
+        uint256[] calldata unlockTokensPerMonth,
+        uint256[] calldata lastWithdrawMonth
+    ) 
+        external 
+        onlyOwner 
+    {
+        for(uint256 i = 0; i < stakeHolders.length; i++) {
+            PrivateStakeHolder storage stakeHolder = privateStakeHoldersInfo[stakeHolders[i]];
+            stakeHolder.lockedStakes = lockedStakes[i];
+            stakeHolder.unlockTokensPerMonth = unlockTokensPerMonth[i];
+            stakeHolder.lastWithdrawMonth = lastWithdrawMonth[i];
+        }
     }
 }
