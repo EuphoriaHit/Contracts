@@ -113,26 +113,14 @@ contract Staking is Initializable, OwnableUpgradeable{
         _setTreasury(treasuryAddress);
         initialLockTime = 1640390400;
 
-        stakingStarted = true; 
-        distributionEnded = false;
-        
-        startTime = 1640943900;
-        totalStakes = 939880265567;
-        totalShares = 938841582453256209981771;
-        stakeHoldersCount = 167;
-        privateStakeHoldersCount = 67;
-        timeInPause = 900;
-
-        rewardDebt = 14148405778;
-        providedTokens = 952882731961;
-        tempBalance = 0;
-        totalSupply = 952882732018;
-    
         withdrawFee = 10;
         withdrawFeePeriod = 3 days;
+    }
 
-        lastRewardTime = 1641127800;
-        accEuphPerShare = 14848003121;
+    function startStaking() external onlyOwner contractNotStarted {
+        stakingStarted = true; 
+        startTime = block.timestamp;
+        transferTokensToContract(initialRewardSupply);
     }
 
     // <================================ END OF CONSTRUCTOR AND INITIALIZER ================================>
